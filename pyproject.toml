@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "folio_data_import"
-version = "0.1.1"
+version = "0.1.2"
 description = "A python module to interact with the data importing capabilities of the open-source FOLIO ILS"
 authors = ["Brooks Travis <brooks.travis@gmail.com>"]
 license = "MIT"
@@ -22,7 +22,6 @@ inquirer = "^3.4.0"
 tqdm = "^4.66.5"
 tabulate = "^0.9.0"
 aiofiles = "^24.1.0"
-pydantic = "^2.8.2"
 
 
 [tool.poetry.group.dev.dependencies]
