@@ -1,16 +1,16 @@
 [tool.poetry]
 name = "folio_data_import"
-version = "0.1.2"
+version = "0.2.0"
 description = "A python module to interact with the data importing capabilities of the open-source FOLIO ILS"
 authors = ["Brooks Travis <brooks.travis@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "src/folio_data_import"}]
+packages = [{include = "folio_data_import", from="src"}]
 
 [tool.poetry.scripts]
-folio-data-import = "src.folio_data_import.__main__:sync_main"
-folio-marc-import = "src.folio_data_import.MARCDataImport:sync_main"
-folio-user-import = "src.folio_data_import.UserImport:sync_main"
+folio-data-import = "folio_data_import.__main__:sync_main"
+folio-marc-import = "folio_data_import.MARCDataImport:sync_main"
+folio-user-import = "folio_data_import.UserImport:sync_main"
 
 [tool.poetry.dependencies]
 python = "^3.9"
