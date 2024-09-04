@@ -243,11 +243,11 @@ class UserImporter:  # noqa: R0902
                 mapped_departments.append(self.department_map[department])
             except KeyError:
                 print(
-                    f'Row {line_number}: Department "{department}" not found, '
+                    f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
                     f"excluding department from user"
                 )
                 await self.logfile.write(
-                    f'Row {line_number}: Department "{department}" not found, '
+                    f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
                     f"excluding department from user\n"
                 )
         user_obj["departments"] = mapped_departments

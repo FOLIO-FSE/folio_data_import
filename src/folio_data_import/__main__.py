@@ -45,7 +45,10 @@ async def main():
     parser.add_argument(
         "--consolidate",
         action="store_true",
-        help="Consolidate records into a single job. Default is to create a new job for each MARC file.",
+        help=(
+            "Consolidate records into a single job. "
+            "Default is to create a new job for each MARC file."
+        ),
     )
     parser.add_argument(
         "--no-progress",
@@ -96,7 +99,10 @@ async def main():
             print("Error importing files: " + str(e))
             raise
     elif args.record_type.lower() == "users":
-        print("User import not yet implemented. Run UserImport.py directly or use folio-user-import CLI.")
+        print(
+            "User import not yet implemented. Run UserImport.py directly "
+            "or use folio-user-import CLI."
+        )
     else:
         print("Record type not supported. Supported types are: MARC21")
 

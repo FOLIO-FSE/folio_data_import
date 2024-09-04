@@ -19,6 +19,6 @@ ignore =
     B905,
     S113
 max-complexity = 16
-max-line-length = 99
+max-line-length = 120
 exclude = .git,__pycache__,docs/source/conf.py,old,build,dist,tests, src/folio_data_import/report_blurbs.py
 statistics = True
