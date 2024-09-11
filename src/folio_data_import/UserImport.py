@@ -630,6 +630,11 @@ async def main() -> None:
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--tenant_id", help="The tenant id")
+    parser.add_argument(
+        "--member_tenant_id",
+        help="The FOLIO ECS member tenant id (if applicable)",
+        default="",
+    )
     parser.add_argument("--library_name", help="The name of the library")
     parser.add_argument("--username", help="The FOLIO username")
     parser.add_argument("--okapi_url", help="The Okapi URL")
@@ -672,8 +677,15 @@ async def main() -> None:
         args.username,
         args.folio_password
         or os.environ.get("FOLIO_PASS", "")
-        or getpass.getpass("Enter your FOLIO password: "),
+        or getpass.getpass(
+            "Enter your FOLIO password: ",
+        ),
     )
+
+    # Set the member tenant id if provided to support FOLIO ECS multi-tenant environments
+    if args.member_tenant_id:
+        folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
+
     user_file_path = Path(args.user_file_path)
     log_file_path = (
         user_file_path.parent.parent

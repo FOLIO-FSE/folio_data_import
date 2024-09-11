@@ -436,6 +436,12 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gateway_url", type=str, help="The FOLIO API Gateway URL")
     parser.add_argument("--tenant_id", type=str, help="The FOLIO tenant ID")
+    parser.add_argument(
+        "--member_tenant_id",
+        type=str,
+        help="The FOLIO ECS member tenant ID (if applicable)",
+        default="",
+    )
     parser.add_argument("--username", type=str, help="The FOLIO username")
     parser.add_argument("--password", type=str, help="The FOLIO password", default="")
     parser.add_argument(
@@ -480,6 +486,11 @@ async def main() -> None:
     folio_client = folioclient.FolioClient(
         args.gateway_url, args.tenant_id, args.username, args.password
     )
+
+    # Set the member tenant id if provided to support FOLIO ECS multi-tenant environments
+    if args.member_tenant_id:
+        folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
+
     if not args.import_profile_name:
         import_profiles = folio_client.folio_get(
             "/data-import-profiles/jobProfiles",
