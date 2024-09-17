@@ -238,7 +238,7 @@ class UserImporter:  # noqa: R0902
             None
         """
         mapped_departments = []
-        for department in user_obj.get("departments", []):
+        for department in user_obj.pop("departments", []):
             try:
                 mapped_departments.append(self.department_map[department])
             except KeyError:
