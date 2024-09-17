@@ -181,12 +181,15 @@ class UserImporter:  # noqa: R0902
             KeyError: If an address type name in the user object is not found in address_type_map.
 
         """
-        if "personal" in user_obj and "addresses" in user_obj["personal"]:
-            for address in user_obj["personal"]["addresses"]:
+        if "personal" in user_obj:
+            addresses = user_obj["personal"].pop("addresses", [])
+            mapped_addresses = []
+            for address in addresses:
                 try:
                     address["addressTypeId"] = self.address_type_map[
                         address["addressTypeId"]
                     ]
+                    mapped_addresses.append(address)
                 except KeyError:
                     if address["addressTypeId"] not in self.address_type_map.values():
                         print(
@@ -197,9 +200,8 @@ class UserImporter:  # noqa: R0902
                             f"Row {line_number}: Address type {address['addressTypeId']} not found"
                             f", removing address\n"
                         )
-                        del address
-            if len(user_obj["personal"]["addresses"]) == 0:
-                del user_obj["personal"]["addresses"]
+            if mapped_addresses:
+                user_obj["personal"]["addresses"] = mapped_addresses
 
     async def map_patron_groups(self, user_obj, line_number) -> None:
         """
