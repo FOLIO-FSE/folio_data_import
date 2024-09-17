@@ -238,7 +238,7 @@ class UserImporter:  # noqa: R0902
             None
         """
         mapped_departments = []
-        for department in user_obj["departments"]:
+        for department in user_obj.get("departments", []):
             try:
                 mapped_departments.append(self.department_map[department])
             except KeyError:
@@ -250,7 +250,8 @@ class UserImporter:  # noqa: R0902
                     f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
                     f"excluding department from user\n"
                 )
-        user_obj["departments"] = mapped_departments
+        if mapped_departments:
+            user_obj["departments"] = mapped_departments
 
     async def update_existing_user(self, user_obj, existing_user) -> Tuple[dict, dict]:
         """
