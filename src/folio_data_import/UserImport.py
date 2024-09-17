@@ -594,7 +594,9 @@ class UserImporter:  # noqa: R0902
                         await self.logfile.write(message + "\n")
                     tasks = []
             if tasks:
+                start = time.time()
                 await asyncio.gather(*tasks)
+                duration = time.time() - start
                 async with self.lock:
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
