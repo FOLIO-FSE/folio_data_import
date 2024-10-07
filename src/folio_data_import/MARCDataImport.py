@@ -31,6 +31,9 @@ except AttributeError:
 # The order in which the report summary should be displayed
 REPORT_SUMMARY_ORDERING = {"created": 0, "updated": 1, "discarded": 2, "error": 3}
 
+# Set default timeout and backoff values for HTTP requests when retrying job status and final summary checks
+RETRY_TIMEOUT_START = 1
+RETRY_TIMEOUT_RETRY_FACTOR = 2
 
 class MARCImportJob:
     """
@@ -80,6 +83,7 @@ class MARCImportJob:
         self.import_profile_name = import_profile_name
         self.batch_size = batch_size
         self.batch_delay = batch_delay
+        self.current_retry_timeout = None
 
     async def do_work(self) -> None:
         """
@@ -149,10 +153,23 @@ class MARCImportJob:
         Raises:
             IndexError: If the job execution with the specified ID is not found.
         """
-        job_status = self.folio_client.folio_get(
-            "/metadata-provider/jobExecutions?statusNot=DISCARDED&uiStatusAny"
-            "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
-        )
+        try:
+            self.current_retry_timeout = (
+                self.current_retry_timeout * RETRY_TIMEOUT_RETRY_FACTOR
+            ) if self.current_retry_timeout else RETRY_TIMEOUT_START
+            job_status = self.folio_client.folio_get(
+                "/metadata-provider/jobExecutions?statusNot=DISCARDED&uiStatusAny"
+                "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
+            )
+            self.current_retry_timeout = None
+        except httpx.ConnectTimeout:
+            sleep(.25)
+            with httpx.Client(
+                timeout=self.current_retry_timeout,
+                verify=self.folio_client.ssl_verify
+            ) as temp_client:
+                self.folio_client.httpx_client = temp_client
+                return await self.get_job_status()
         try:
             status = [
                 job for job in job_status["jobExecutions"] if job["id"] == self.job_id
@@ -393,9 +410,7 @@ class MARCImportJob:
                     await self.get_job_status()
                 sleep(1)
             if self.finished:
-                job_summary = self.folio_client.folio_get(
-                    f"/metadata-provider/jobSummary/{self.job_id}"
-                )
+                job_summary = await self.get_job_summary()
                 job_summary.pop("jobExecutionId")
                 job_summary.pop("totalErrors")
                 columns = ["Summary"] + list(job_summary.keys())
@@ -425,6 +440,31 @@ class MARCImportJob:
                 )
             self.last_current = 0
             self.finished = False
+
+    async def get_job_summary(self) -> dict:
+        """
+        Retrieves the job summary for the current job execution.
+
+        Returns:
+            dict: The job summary for the current job execution.
+        """
+        try:
+            self.current_retry_timeout = (
+                self.current_retry_timeout * RETRY_TIMEOUT_RETRY_FACTOR
+            ) if self.current_retry_timeout else RETRY_TIMEOUT_START
+            job_summary = self.folio_client.folio_get(
+                f"/metadata-provider/jobSummary/{self.job_id}"
+            )
+            self.current_retry_timeout = None
+        except httpx.ReadTimeout:  #
+            sleep(.25)
+            with httpx.Client(
+                timeout=self.current_retry_timeout,
+                verify=self.folio_client.ssl_verify
+            ) as temp_client:
+                self.folio_client.httpx_client = temp_client
+                return await self.get_job_summary()
+        return job_summary
 
 
 async def main() -> None:
