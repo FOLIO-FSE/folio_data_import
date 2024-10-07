@@ -3,6 +3,7 @@ import asyncio
 import glob
 import io
 import os
+import sys
 from typing import List
 import uuid
 from contextlib import ExitStack
@@ -491,6 +492,17 @@ async def main() -> None:
     if args.member_tenant_id:
         folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
 
+    if os.path.isabs(args.marc_file_path):
+        marc_files = [Path(x) for x in glob.glob(args.marc_file_path)]
+    else:
+        marc_files = list(Path("./").glob(args.marc_file_path))
+
+    if len(marc_files) == 0:
+        print(f"No files found matching {args.marc_file_path}. Exiting.")
+        sys.exit(1)
+    else:
+        print(marc_files)
+
     if not args.import_profile_name:
         import_profiles = folio_client.folio_get(
             "/data-import-profiles/jobProfiles",
@@ -511,8 +523,6 @@ async def main() -> None:
         ]
         answers = inquirer.prompt(questions)
         args.import_profile_name = answers["import_profile_name"]
-    marc_files = [Path(x) for x in glob.glob(args.marc_file_path, root_dir="./")]
-    print(marc_files)
     try:
         await MARCImportJob(
             folio_client,

@@ -15,7 +15,7 @@ folio-user-import = "folio_data_import.UserImport:sync_main"
 [tool.poetry.dependencies]
 python = "^3.9"
 folioclient = "^0.60.5"
-httpx = "^0.23.0"
+httpx = "^0.27.2"
 pymarc = "^5.2.2"
 pyhumps = "^3.8.0"
 inquirer = "^3.4.0"
