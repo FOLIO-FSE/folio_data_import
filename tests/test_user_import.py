@@ -1,7 +1,9 @@
 from unittest.mock import Mock
+
 import pytest
-from folio_data_import.UserImport import UserImporter
 from folioclient import FolioClient
+
+from folio_data_import.UserImport import UserImporter
 
 
 @pytest.fixture
@@ -32,6 +34,13 @@ def test_build_ref_data_id_map(folio_client):
                 {"id": "300", "name": "Department3"},
             ]
 
+        if endpoint == "/service-points":
+            return [
+                {"id": "100", "name": "ServicePoint1"},
+                {"id": "200", "name": "ServicePoint2"},
+                {"id": "300", "name": "ServicePoint3"},
+            ]
+
     folio_client.folio_get_all = mock_folio_get_all
 
     # Test the build_ref_data_id_map method
@@ -52,4 +61,13 @@ def test_build_ref_data_id_map(folio_client):
         "Department1": "100",
         "Department2": "200",
         "Department3": "300",
+    }
+
+    service_point_map = UserImporter.build_ref_data_id_map(
+        folio_client, "/service-points", "servicepoints", "name"
+    )
+    assert service_point_map == {
+        "ServicePoint1": "100",
+        "ServicePoint2": "200",
+        "ServicePoint3": "300",
     }
