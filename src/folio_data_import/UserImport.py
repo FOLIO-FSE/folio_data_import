@@ -21,6 +21,14 @@ except AttributeError:
 
     utc = zoneinfo.ZoneInfo("UTC")
 
+# Mapping of preferred contact type IDs to their corresponding values
+PREFERRED_CONTACT_TYPES_MAP = {
+    "001": "mail",
+    "002": "email",
+    "003": "text",
+    "004": "phone",
+    "005": "mobile",
+}
 
 class UserImporter:  # noqa: R0902
     """
@@ -41,6 +49,7 @@ class UserImporter:  # noqa: R0902
         http_client: httpx.AsyncClient,
         user_match_key: str = "externalSystemId",
         only_update_present_fields: bool = False,
+        default_preferred_contact_type: str = "002",
     ) -> None:
         self.limit_simultaneous_requests = limit_simultaneous_requests
         self.batch_size = batch_size
@@ -56,10 +65,14 @@ class UserImporter:  # noqa: R0902
         self.department_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/departments", "departments", "name"
         )
+        self.service_point_map: dict = self.build_ref_data_id_map(
+            self.folio_client, "/service-points", "servicepoints", "code"
+        )
         self.logfile: AsyncTextIOWrapper = logfile
         self.errorfile: AsyncTextIOWrapper = errorfile
         self.http_client: httpx.AsyncClient = http_client
         self.only_update_present_fields: bool = only_update_present_fields
+        self.default_preferred_contact_type: str = default_preferred_contact_type
         self.match_key = user_match_key
         self.lock: asyncio.Lock = asyncio.Lock()
         self.logs: dict = {"created": 0, "updated": 0, "failed": 0}
@@ -255,13 +268,14 @@ class UserImporter:  # noqa: R0902
         if mapped_departments:
             user_obj["departments"] = mapped_departments
 
-    async def update_existing_user(self, user_obj, existing_user) -> Tuple[dict, dict]:
+    async def update_existing_user(self, user_obj, existing_user, protected_fields) -> Tuple[dict, dict]:
         """
         Updates an existing user with the provided user object.
 
         Args:
             user_obj (dict): The user object containing the updated user information.
             existing_user (dict): The existing user object to be updated.
+            protected_fields (dict): A dictionary containing the protected fields and their values.
 
         Returns:
             tuple: A tuple containing the updated existing user object and the API response.
@@ -270,6 +284,8 @@ class UserImporter:  # noqa: R0902
             None
 
         """
+        await self.set_preferred_contact_type(user_obj, existing_user)
+        preferred_contact_type = {"preferredContactTypeId": existing_user.get("personal", {}).pop("preferredContactTypeId")}
         if self.only_update_present_fields:
             new_personal = user_obj.pop("personal", {})
             existing_personal = existing_user.pop("personal", {})
@@ -290,6 +306,18 @@ class UserImporter:  # noqa: R0902
                 existing_user["personal"] = existing_personal
         else:
             existing_user.update(user_obj)
+        if "personal" in existing_user:
+            existing_user["personal"].update(preferred_contact_type)
+        else:
+            existing_user["personal"] = preferred_contact_type
+        for key, value in protected_fields.items():
+            if type(value) is dict:
+                try:
+                    existing_user[key].update(value)
+                except KeyError:
+                    existing_user[key] = value
+            else:
+                existing_user[key] = value
         create_update_user = await self.http_client.put(
             self.folio_client.okapi_url + f"/users/{existing_user['id']}",
             headers=self.folio_client.okapi_headers,
@@ -320,7 +348,41 @@ class UserImporter:  # noqa: R0902
             self.logs["created"] += 1
         return response.json()
 
-    async def create_or_update_user(self, user_obj, existing_user, line_number) -> dict:
+    async def set_preferred_contact_type(self, user_obj, existing_user) -> None:
+        """
+        Sets the preferred contact type for a user object. If the provided preferred contact type
+        is not valid, the default preferred contact type is used, unless the previously existing
+        user object has a valid preferred contact type set. In that case, the existing preferred
+        contact type is used.
+        """
+        if "personal" in user_obj and "preferredContactTypeId" in user_obj["personal"]:
+            current_pref_contact = user_obj["personal"].get(
+                "preferredContactTypeId", ""
+            )
+            if mapped_contact_type := dict([(v, k) for k, v in PREFERRED_CONTACT_TYPES_MAP.items()]).get(
+                current_pref_contact,
+                "",
+            ):
+                existing_user["personal"]["preferredContactTypeId"] = mapped_contact_type
+            else:
+                existing_user["personal"]["preferredContactTypeId"] = current_pref_contact if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP else self.default_preferred_contact_type
+        else:
+            print(
+                f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP}\n"
+                f"Setting preferred contact type to {self.default_preferred_contact_type} or using existing value"
+            )
+            await self.logfile.write(
+                f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP}\n"
+                f"Setting preferred contact type to {self.default_preferred_contact_type} or using existing value\n"
+            )
+            mapped_contact_type = existing_user.get("personal", {}).get(
+                "preferredContactTypeId", ""
+            ) or self.default_preferred_contact_type
+            if "personal" not in existing_user:
+                existing_user["personal"] = {}
+            existing_user["personal"]["preferredContactTypeId"] = mapped_contact_type or self.default_preferred_contact_type
+
+    async def create_or_update_user(self, user_obj, existing_user, protected_fields, line_number) -> dict:
         """
         Creates or updates a user based on the given user object and existing user.
 
@@ -334,7 +396,7 @@ class UserImporter:  # noqa: R0902
         """
         if existing_user:
             existing_user, update_user = await self.update_existing_user(
-                user_obj, existing_user
+                user_obj, existing_user, protected_fields
             )
             try:
                 update_user.raise_for_status()
@@ -386,16 +448,33 @@ class UserImporter:  # noqa: R0902
         """
         user_obj = json.loads(user)
         user_obj["type"] = user_obj.get("type", "patron")
-        if "personal" in user_obj:
-            current_pref_contact = user_obj["personal"].get(
-                "preferredContactTypeId", ""
-            )
-            user_obj["personal"]["preferredContactTypeId"] = (
-                current_pref_contact
-                if current_pref_contact in ["001", "002", "003"]
-                else "002"
-            )
         return user_obj
+
+    async def get_protected_fields(self, existing_user) -> dict:
+        """
+        Retrieves the protected fields from the existing user object.
+
+        Args:
+            existing_user (dict): The existing user object.
+
+        Returns:
+            dict: A dictionary containing the protected fields and their values.
+        """
+        protected_fields = {}
+        protected_fields_list = existing_user.get("customFields", {}).get("protectedFields", "").split(",")
+        for field in protected_fields_list:
+            if len(field.split(".")) > 1:
+                field, subfield = field.split(".")
+                if field not in protected_fields:
+                    protected_fields[field] = {}
+                protected_fields[field][subfield] = existing_user.get(field, {}).pop(subfield, None)
+                if protected_fields[field][subfield] is None:
+                    protected_fields[field].pop(subfield)
+            else:
+                protected_fields[field] = existing_user.pop(field, None)
+                if protected_fields[field] is None:
+                    protected_fields.pop(field)
+        return protected_fields
 
     async def process_existing_user(self, user_obj) -> Tuple[dict, dict, dict, dict]:
         """
@@ -410,14 +489,18 @@ class UserImporter:  # noqa: R0902
                    and the existing PU object (existing_pu).
         """
         rp_obj = user_obj.pop("requestPreference", {})
+        spu_obj = user_obj.pop("servicePointsUser")
         existing_user = await self.get_existing_user(user_obj)
         if existing_user:
             existing_rp = await self.get_existing_rp(user_obj, existing_user)
             existing_pu = await self.get_existing_pu(user_obj, existing_user)
+            existing_spu = await self.get_existing_spu(existing_user)
+            protected_fields = await self.get_protected_fields(existing_user)
         else:
             existing_rp = {}
             existing_pu = {}
-        return rp_obj, existing_user, existing_rp, existing_pu
+            existing_spu = {}
+        return rp_obj, spu_obj, existing_user, protected_fields, existing_rp, existing_pu, existing_spu
 
     async def create_or_update_rp(self, rp_obj, existing_rp, new_user_obj):
         """
@@ -528,14 +611,14 @@ class UserImporter:  # noqa: R0902
         """
         async with self.limit_simultaneous_requests:
             user_obj = await self.process_user_obj(user)
-            rp_obj, existing_user, existing_rp, existing_pu = (
+            rp_obj, spu_obj, existing_user, protected_fields, existing_rp, existing_pu, existing_spu = (
                 await self.process_existing_user(user_obj)
             )
             await self.map_address_types(user_obj, line_number)
             await self.map_patron_groups(user_obj, line_number)
             await self.map_departments(user_obj, line_number)
             new_user_obj = await self.create_or_update_user(
-                user_obj, existing_user, line_number
+                user_obj, existing_user, protected_fields, line_number
             )
             if new_user_obj:
                 try:
@@ -572,6 +655,124 @@ class UserImporter:  # noqa: R0902
                         )
                         print(pu_error_message)
                         await self.logfile.write(pu_error_message + "\n")
+                await self.handle_service_points_user(spu_obj, existing_spu, new_user_obj)
+
+    async def map_service_points(self, spu_obj, existing_user):
+        """
+        Maps the service points of a user object using the provided service point map.
+
+        Args:
+            spu_obj (dict): The service-points-user object to update.
+            existing_user (dict): The existing user object associated with the spu_obj.
+
+        Returns:
+            None
+        """
+        if "servicePointsIds" in spu_obj:
+            mapped_service_points = []
+            for sp in spu_obj.pop("servicePointsIds", []):
+                try:
+                    mapped_service_points.append(self.service_point_map[sp])
+                except KeyError:
+                    print(
+                        f'Service point "{sp}" not found, excluding service point from user: '
+                        f'{self.service_point_map}'
+                    )
+            if mapped_service_points:
+                spu_obj["servicePointsIds"] = mapped_service_points
+        if "defaultServicePointId" in spu_obj:
+            sp_code = spu_obj.pop('defaultServicePointId', '')
+            try:
+                mapped_sp_id = self.service_point_map[sp_code]
+                if mapped_sp_id not in spu_obj.get('servicePointsIds', []):
+                    print(
+                        f'Default service point "{sp_code}" not found in assigned service points, '
+                        'excluding default service point from user'
+                    )
+                else:
+                    spu_obj['defaultServicePointId'] = mapped_sp_id
+            except KeyError:
+                print(
+                    f'Default service point "{sp_code}" not found, excluding default service '
+                    f'point from user: {existing_user["id"]}'
+                )
+
+    async def handle_service_points_user(self, spu_obj, existing_spu, existing_user):
+        """
+        Handles processing a service-points-user object for a user.
+
+        Args:
+            spu_obj (dict): The service-points-user object to process.
+            existing_spu (dict): The existing service-points-user object, if it exists.
+            existing_user (dict): The existing user object associated with the spu_obj.
+        """
+        if spu_obj is not None:
+            await self.map_service_points(spu_obj, existing_user)
+            if existing_spu:
+                await self.update_existing_spu(spu_obj, existing_spu)
+            else:
+                await self.create_new_spu(spu_obj, existing_user)
+
+    async def get_existing_spu(self, existing_user):
+        """
+        Retrieves the existing service-points-user object for a given user.
+
+        Args:
+            existing_user (dict): The existing user object.
+
+        Returns:
+            dict: The existing service-points-user object.
+        """
+        try:
+            existing_spu = await self.http_client.get(
+                self.folio_client.okapi_url + "/service-points-users",
+                headers=self.folio_client.okapi_headers,
+                params={"query": f"userId=={existing_user['id']}"},
+            )
+            existing_spu.raise_for_status()
+            existing_spu = existing_spu.json().get("servicePointsUsers", [])
+            existing_spu = existing_spu[0] if existing_spu else {}
+        except httpx.HTTPError:
+            existing_spu = {}
+        return existing_spu
+
+    async def create_new_spu(self, spu_obj, existing_user):
+        """
+        Creates a new service-points-user object for a given user.
+
+        Args:
+            spu_obj (dict): The service-points-user object to create.
+            existing_user (dict): The existing user object.
+
+        Returns:
+            None
+        """
+        spu_obj["userId"] = existing_user["id"]
+        response = await self.http_client.post(
+            self.folio_client.okapi_url + "/service-points-users",
+            headers=self.folio_client.okapi_headers,
+            json=spu_obj,
+        )
+        response.raise_for_status()
+
+    async def update_existing_spu(self, spu_obj, existing_spu):
+        """
+        Updates an existing service-points-user object with the provided service-points-user object.
+
+        Args:
+            spu_obj (dict): The service-points-user object containing the updated values.
+            existing_spu (dict): The existing service-points-user object to be updated.
+
+        Returns:
+            None
+        """
+        existing_spu.update(spu_obj)
+        response = await self.http_client.put(
+            self.folio_client.okapi_url + f"/service-points-users/{existing_spu['id']}",
+            headers=self.folio_client.okapi_headers,
+            json=existing_spu,
+        )
+        response.raise_for_status()
 
     async def process_file(self) -> None:
         """
@@ -602,7 +803,7 @@ class UserImporter:  # noqa: R0902
                 async with self.lock:
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                        f"Batch of {self.batch_size} users processed in {duration:.2f} seconds. - "
+                        f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
                         f"Users created: {self.logs['created']} - Users updated: "
                         f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
                     )
@@ -626,6 +827,10 @@ async def main() -> None:
         --batch_size (int): How many records to process before logging statistics. Default 250.
         --folio_password (str): The FOLIO password.
         --user_match_key (str): The key to use to match users. Default "externalSystemId".
+        --report_file_base_path (str): The base path for the log and error files. Default "./".
+        --update_only_present_fields (bool): Only update fields that are present in the new user object.
+        --default_preferred_contact_type (str): The default preferred contact type to use if the provided \
+            value is not valid or not present. Default "002".
 
     Raises:
         Exception: If an unknown error occurs during the import process.
@@ -664,9 +869,24 @@ async def main() -> None:
         default="externalSystemId",
     )
     parser.add_argument(
+        "--report_file_base_path",
+        help="The base path for the log and error files",
+        default="./",
+    )
+    parser.add_argument(
         "--update_only_present_fields",
         help="Only update fields that are present in the user object",
         action="store_true",
+    )
+    parser.add_argument(
+        "--default_preferred_contact_type",
+        help=(
+            "The default preferred contact type to use if the provided value is not present or not valid. "
+            "Note: '002' is the default, and will be used if the provided value is not valid or not present, "
+            "unless the existing user object being updated has a valid preferred contact type set."
+        ),
+        choices=list(PREFERRED_CONTACT_TYPES_MAP.keys()) + list(PREFERRED_CONTACT_TYPES_MAP.values()),
+        default="002",
     )
     args = parser.parse_args()
 
@@ -692,13 +912,13 @@ async def main() -> None:
         folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
 
     user_file_path = Path(args.user_file_path)
+    report_file_base_path = Path(args.report_file_base_path)
     log_file_path = (
-        user_file_path.parent.parent
-        / "reports"
+        report_file_base_path
         / f"log_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.log"
     )
     error_file_path = (
-        user_file_path.parent
+        report_file_base_path
         / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
     )
     async with aiofiles.open(
@@ -719,6 +939,7 @@ async def main() -> None:
                 http_client,
                 args.user_match_key,
                 args.update_only_present_fields,
+                args.default_preferred_contact_type,
             )
             await importer.do_import()
         except Exception as ee:
