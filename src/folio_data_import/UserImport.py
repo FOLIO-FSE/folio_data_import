@@ -100,7 +100,8 @@ class UserImporter:  # noqa: R0902
 
         This method triggers the process of importing users by calling the `process_file` method.
         """
-        await self.process_file()
+        with open(self.user_file_path, "r", encoding="utf-8") as openfile:
+            await self.process_file(openfile)
 
     async def get_existing_user(self, user_obj) -> dict:
         """
@@ -437,7 +438,7 @@ class UserImporter:  # noqa: R0902
 
     async def process_user_obj(self, user: str) -> dict:
         """
-        Process a user object.
+        Process a user object. If not type is found in the source object, type is set to "patron".
 
         Args:
             user (str): The user data to be processed, as a json string.
@@ -774,41 +775,43 @@ class UserImporter:  # noqa: R0902
         )
         response.raise_for_status()
 
-    async def process_file(self) -> None:
+    async def process_file(self, openfile) -> None:
         """
         Process the user object file.
+
+        Args:
+            openfile: The file object to process.
         """
-        with open(self.user_file_path, "r", encoding="utf-8") as openfile:
-            tasks = []
-            for line_number, user in enumerate(openfile):
-                tasks.append(self.process_line(user, line_number))
-                if len(tasks) == self.batch_size:
-                    start = time.time()
-                    await asyncio.gather(*tasks)
-                    duration = time.time() - start
-                    async with self.lock:
-                        message = (
-                            f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                            f"Batch of {self.batch_size} users processed in {duration:.2f} "
-                            f"seconds. - Users created: {self.logs['created']} - Users updated: "
-                            f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
-                        )
-                        print(message)
-                        await self.logfile.write(message + "\n")
-                    tasks = []
-            if tasks:
+        tasks = []
+        for line_number, user in enumerate(openfile):
+            tasks.append(self.process_line(user, line_number))
+            if len(tasks) == self.batch_size:
                 start = time.time()
                 await asyncio.gather(*tasks)
                 duration = time.time() - start
                 async with self.lock:
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                        f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
-                        f"Users created: {self.logs['created']} - Users updated: "
+                        f"Batch of {self.batch_size} users processed in {duration:.2f} "
+                        f"seconds. - Users created: {self.logs['created']} - Users updated: "
                         f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
                     )
                     print(message)
                     await self.logfile.write(message + "\n")
+                tasks = []
+        if tasks:
+            start = time.time()
+            await asyncio.gather(*tasks)
+            duration = time.time() - start
+            async with self.lock:
+                message = (
+                    f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
+                    f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
+                    f"Users created: {self.logs['created']} - Users updated: "
+                    f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
+                )
+                print(message)
+                await self.logfile.write(message + "\n")
 
 
 async def main() -> None:
