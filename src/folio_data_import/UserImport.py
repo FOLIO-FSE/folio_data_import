@@ -501,6 +501,7 @@ class UserImporter:  # noqa: R0902
             existing_rp = {}
             existing_pu = {}
             existing_spu = {}
+            protected_fields = {}
         return rp_obj, spu_obj, existing_user, protected_fields, existing_rp, existing_pu, existing_spu
 
     async def create_or_update_rp(self, rp_obj, existing_rp, new_user_obj):
