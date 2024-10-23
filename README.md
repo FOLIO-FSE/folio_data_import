@@ -72,11 +72,30 @@ When this package is installed via PyPI or using `poetry install` from this repo
     }
 }
 ```
-One thing to note here is that this importer does not require `externalSystemId` as the match point for your objects. While it is the default, if the user objects have `id` present, that will be used, falling back to `externalSystemId`. However, you can also specify `username` or `barcode` as the match point if desired, using the `--default_preferred_contact_type` argument.
+#### Matching Existing Users
 
-Another point of departure from the behavior of `mod-user-import` is the handling of `preferredContactTypeId`. This importer will accept either the `"001", "002", "003"...` values stored by the FOLIO, or the human-friendly strings used by `mod-user-import` (`"mail", "email", "text", "phone", "mobile"`). It will also __*set a customizable default for all users that do not otherwise have a valid value specified*__, unless a value is already present in the user record being updated.
+Unlike mod-user-import, this importer does not require `externalSystemId` as the match point for your objects. If the user objects have `id` values, that will be used, falling back to `externalSystemId`. However, you can also specify `username` or `barcode` as the match point if desired, using the `--user_match_key` argument.
 
-How to use:
+#### Preferred Contact Type Mapping
+
+Another point of departure from the behavior of `mod-user-import` is the handling of `preferredContactTypeId`. This importer will accept either the `"001", "002", "003"...` values stored by the FOLIO, or the human-friendly strings used by `mod-user-import` (`"mail", "email", "text", "phone", "mobile"`). It will also __*set a customizable default for all users that do not otherwise have a valid value specified*__ (using `--default_preferred_contact_type`), unless a (valid) value is already present in the user record being updated.
+
+#### Field Protection (*experimental*)
+
+This script offers a rudimentary field protection implementation using custom fields. To enable this functionality, create a text custom field that has the field name `protectedFields`. In this field, you ca specify a comma-separated list of User schema field names, using dot-notation for nested fields. This protection should support all standard fields except addresses within `personal.addresses`. If you include `personal.addresses` in a user record, any existing addresses will be replaced by the new values.
+
+##### Example
+
+```
+{
+    "protectedFields": "customFields.protectedFields,personal.preferredFirstName,barcode,personal.telephone,personal.addresses"
+}
+```
+
+Would result in `preferredFirstName`, `barcode`, and `telephone` remaining unchanged, regardless of the contents of the incoming records.
+
+
+#### How to use:
 1. Generate a JSON lines (one JSON object per line) file of FOLIO user objects in the style of [mod-user-import](https://github.com/folio-org/mod-user-import)
 2. Run the script and specify the required arguments (and any desired optional arguments), including the path to your file of user objects
 
