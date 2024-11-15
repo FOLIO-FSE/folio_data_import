@@ -41,12 +41,12 @@ class UserImporter:  # noqa: R0902
         self,
         folio_client: folioclient.FolioClient,
         library_name: str,
-        user_file_path: Path,
         batch_size: int,
         limit_simultaneous_requests: asyncio.Semaphore,
         logfile: AsyncTextIOWrapper,
         errorfile: AsyncTextIOWrapper,
         http_client: httpx.AsyncClient,
+        user_file_path: Path = None,
         user_match_key: str = "externalSystemId",
         only_update_present_fields: bool = False,
         default_preferred_contact_type: str = "002",
@@ -100,8 +100,11 @@ class UserImporter:  # noqa: R0902
 
         This method triggers the process of importing users by calling the `process_file` method.
         """
-        with open(self.user_file_path, "r", encoding="utf-8") as openfile:
-            await self.process_file(openfile)
+        if self.user_file_path:
+            with open(self.user_file_path, "r", encoding="utf-8") as openfile:
+                await self.process_file(openfile)
+        else:
+            raise FileNotFoundError("No user objects file provided")
 
     async def get_existing_user(self, user_obj) -> dict:
         """
@@ -781,7 +784,7 @@ class UserImporter:  # noqa: R0902
         Process the user object file.
 
         Args:
-            openfile: The file object to process.
+            openfile: The file or file-like object to process.
         """
         tasks = []
         for line_number, user in enumerate(openfile):
@@ -935,12 +938,12 @@ async def main() -> None:
             importer = UserImporter(
                 folio_client,
                 library_name,
-                user_file_path,
                 batch_size,
                 limit_async_requests,
                 logfile,
                 errorfile,
                 http_client,
+                user_file_path,
                 args.user_match_key,
                 args.update_only_present_fields,
                 args.default_preferred_contact_type,
