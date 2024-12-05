@@ -221,7 +221,10 @@ class UserImporter:  # noqa: R0902
             mapped_addresses = []
             for address in addresses:
                 try:
-                    if self.validate_uuid(address["addressTypeId"]):
+                    if (
+                        self.validate_uuid(address["addressTypeId"])
+                        and address["addressTypeId"] in self.address_type_map.values()
+                    ):
                         await self.logfile.write(
                             f"Row {line_number}: Address type {address['addressTypeId']} is a UUID, "
                             f"skipping mapping\n"
@@ -257,7 +260,10 @@ class UserImporter:  # noqa: R0902
             None
         """
         try:
-            if self.validate_uuid(user_obj["patronGroup"]):
+            if (
+                self.validate_uuid(user_obj["patronGroup"])
+                and user_obj["patronGroup"] in self.patron_group_map.values()
+            ):
                 await self.logfile.write(
                     f"Row {line_number}: Patron group {user_obj['patronGroup']} is a UUID, "
                     f"skipping mapping\n"
@@ -290,7 +296,10 @@ class UserImporter:  # noqa: R0902
         mapped_departments = []
         for department in user_obj.pop("departments", []):
             try:
-                if self.validate_uuid(department):
+                if (
+                    self.validate_uuid(department)
+                    and department in self.department_map.values()
+                ):
                     await self.logfile.write(
                         f"Row {line_number}: Department {department} is a UUID, skipping mapping\n"
                     )
@@ -714,7 +723,7 @@ class UserImporter:  # noqa: R0902
             mapped_service_points = []
             for sp in spu_obj.pop("servicePointsIds", []):
                 try:
-                    if self.validate_uuid(sp):
+                    if self.validate_uuid(sp) and sp in self.service_point_map.values():
                         await self.logfile.write(
                             f"Service point {sp} is a UUID, skipping mapping\n"
                         )
@@ -731,7 +740,7 @@ class UserImporter:  # noqa: R0902
         if "defaultServicePointId" in spu_obj:
             sp_code = spu_obj.pop('defaultServicePointId', '')
             try:
-                if self.validate_uuid(sp_code):
+                if self.validate_uuid(sp_code) and sp_code in self.service_point_map.values():
                     await self.logfile.write(
                         f"Default service point {sp_code} is a UUID, skipping mapping\n"
                     )
