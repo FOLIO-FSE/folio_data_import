@@ -539,7 +539,7 @@ class UserImporter:  # noqa: R0902
                    and the existing PU object (existing_pu).
         """
         rp_obj = user_obj.pop("requestPreference", {})
-        spu_obj = user_obj.pop("servicePointsUser")
+        spu_obj = user_obj.pop("servicePointsUser", {})
         existing_user = await self.get_existing_user(user_obj)
         if existing_user:
             existing_rp = await self.get_existing_rp(user_obj, existing_user)
@@ -769,7 +769,7 @@ class UserImporter:  # noqa: R0902
             existing_spu (dict): The existing service-points-user object, if it exists.
             existing_user (dict): The existing user object associated with the spu_obj.
         """
-        if spu_obj is not None:
+        if spu_obj:
             await self.map_service_points(spu_obj, existing_user)
             if existing_spu:
                 await self.update_existing_spu(spu_obj, existing_spu)
