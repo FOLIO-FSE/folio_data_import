@@ -165,7 +165,7 @@ class MARCImportJob:
                 "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
             )
             self.current_retry_timeout = None
-        except httpx.ConnectTimeout:
+        except (httpx.ConnectTimeout, httpx.ReadTimeout):
             sleep(.25)
             with httpx.Client(
                 timeout=self.current_retry_timeout,
@@ -496,7 +496,7 @@ class MARCImportJob:
                 f"/metadata-provider/jobSummary/{self.job_id}"
             )
             self.current_retry_timeout = None
-        except httpx.ReadTimeout:  #
+        except (httpx.ConnectTimeout, httpx.ReadTimeout):
             sleep(.25)
             with httpx.Client(
                 timeout=self.current_retry_timeout,
