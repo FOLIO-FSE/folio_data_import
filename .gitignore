@@ -126,3 +126,5 @@ poetry.lock
 *.mrk
 scratch_pad.*
 snapshot-users.jsonl
+import-error.json
+snapshot-users*.json*

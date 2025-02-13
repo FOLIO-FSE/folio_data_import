@@ -277,7 +277,7 @@ class MARCImportJob:
         total_records = 0
         for import_file in files:
             while True:
-                chunk = import_file.read(1024)
+                chunk = import_file.read(104857600)
                 if not chunk:
                     break
                 total_records += chunk.count(b"\x1d")
@@ -291,24 +291,33 @@ class MARCImportJob:
         Args:
             batch_payload (dict): A records payload containing the current batch of MARC records.
         """
-        post_batch = self.http_client.post(
-            self.folio_client.okapi_url
-            + f"/change-manager/jobExecutions/{self.job_id}/records",
-            headers=self.folio_client.okapi_headers,
-            json=batch_payload,
-        )
+        try:
+            post_batch = self.http_client.post(
+                self.folio_client.okapi_url
+                + f"/change-manager/jobExecutions/{self.job_id}/records",
+                headers=self.folio_client.okapi_headers,
+                json=batch_payload,
+            )
+        except httpx.ReadTimeout:
+            sleep(.25)
+            return await self.process_record_batch(batch_payload)
         try:
             post_batch.raise_for_status()
             self.total_records_sent += len(self.record_batch)
             self.record_batch = []
             self.pbar_sent.update(len(batch_payload["initialRecords"]))
         except Exception as e:
-            print("Error posting batch: " + str(e))
-            for record in self.record_batch:
-                self.failed_batches_file.write(record)
-                self.error_records += len(self.record_batch)
-                self.pbar_sent.total = self.pbar_sent.total - len(self.record_batch)
-            self.record_batch = []
+            if hasattr(e, "response") and e.response.status_code in [500, 422]: # TODO: #26 Check for specific error code once https://folio-org.atlassian.net/browse/MODSOURMAN-1281 is resolved
+                self.total_records_sent += len(self.record_batch)
+                self.record_batch = []
+                self.pbar_sent.update(len(batch_payload["initialRecords"]))
+            else:
+                print("Error posting batch: " + str(e))
+                for record in self.record_batch:
+                    self.failed_batches_file.write(record)
+                    self.error_records += len(self.record_batch)
+                    self.pbar_sent.total = self.pbar_sent.total - len(self.record_batch)
+                self.record_batch = []
         sleep(self.batch_delay)
 
     async def process_records(self, files, total_records) -> None:
