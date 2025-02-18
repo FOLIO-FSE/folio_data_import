@@ -505,14 +505,17 @@ class MARCImportJob:
                 f"/metadata-provider/jobSummary/{self.job_id}"
             )
             self.current_retry_timeout = None
-        except (httpx.ConnectTimeout, httpx.ReadTimeout):
-            sleep(.25)
-            with httpx.Client(
-                timeout=self.current_retry_timeout,
-                verify=self.folio_client.ssl_verify
-            ) as temp_client:
-                self.folio_client.httpx_client = temp_client
-                return await self.get_job_summary()
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
+            if not hasattr(e, "response") or e.response.status_code == 502:
+                sleep(.25)
+                with httpx.Client(
+                    timeout=self.current_retry_timeout,
+                    verify=self.folio_client.ssl_verify
+                ) as temp_client:
+                    self.folio_client.httpx_client = temp_client
+                    return await self.get_job_status()
+            else:
+                raise e
         return job_summary
 
 
@@ -594,6 +597,8 @@ async def main() -> None:
         marc_files = [Path(x) for x in glob.glob(args.marc_file_path)]
     else:
         marc_files = list(Path("./").glob(args.marc_file_path))
+
+    marc_files.sort()
 
     if len(marc_files) == 0:
         print(f"No files found matching {args.marc_file_path}. Exiting.")
