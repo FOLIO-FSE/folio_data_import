@@ -5,16 +5,14 @@ import getpass
 import json
 import os
 import time
-import uuid
 import logging
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Tuple
+from folio_data_import.SetupLogging import setup_logging 
 
-import aiofiles
 import folioclient
 import httpx
-from aiofiles.threadpool.text import AsyncTextIOWrapper
 
 try:
     utc = datetime.UTC
@@ -91,23 +89,6 @@ class UserImporter:  # noqa: R0902
             dict: A dictionary mapping reference data keys to their corresponding IDs.
         """
         return {x[name]: x["id"] for x in folio_client.folio_get_all(endpoint, key)}
-
-    @staticmethod
-    def validate_uuid(uuid_string: str) -> bool:
-        """
-        Validate a UUID string.
-
-        Args:
-            uuid_string (str): The UUID string to validate.
-
-        Returns:
-            bool: True if the UUID is valid, otherwise False.
-        """
-        try:
-            uuid.UUID(uuid_string)
-            return True
-        except ValueError:
-            return False
 
     async def do_import(self) -> None:
         """
@@ -218,20 +199,10 @@ class UserImporter:  # noqa: R0902
             mapped_addresses = []
             for address in addresses:
                 try:
-                    if (
-                        self.validate_uuid(address["addressTypeId"])
-                        and address["addressTypeId"] in self.address_type_map.values()
-                    ):
-                        await self.logfile.write(
-                            f"Row {line_number}: Address type {address['addressTypeId']} is a UUID, "
-                            f"skipping mapping\n"
-                        )
-                        mapped_addresses.append(address)
-                    else:
-                        address["addressTypeId"] = self.address_type_map[
-                            address["addressTypeId"]
-                        ]
-                        mapped_addresses.append(address)
+                    address["addressTypeId"] = self.address_type_map[
+                        address["addressTypeId"]
+                    ]
+                    mapped_addresses.append(address)
                 except KeyError:
                     if address["addressTypeId"] not in self.address_type_map.values():
                         logging.info(
@@ -253,16 +224,7 @@ class UserImporter:  # noqa: R0902
             None
         """
         try:
-            if (
-                self.validate_uuid(user_obj["patronGroup"])
-                and user_obj["patronGroup"] in self.patron_group_map.values()
-            ):
-                await self.logfile.write(
-                    f"Row {line_number}: Patron group {user_obj['patronGroup']} is a UUID, "
-                    f"skipping mapping\n"
-                )
-            else:
-                user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
+            user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
         except KeyError:
             if user_obj["patronGroup"] not in self.patron_group_map.values():
                 logging.info(
@@ -285,16 +247,7 @@ class UserImporter:  # noqa: R0902
         mapped_departments = []
         for department in user_obj.pop("departments", []):
             try:
-                if (
-                    self.validate_uuid(department)
-                    and department in self.department_map.values()
-                ):
-                    await self.logfile.write(
-                        f"Row {line_number}: Department {department} is a UUID, skipping mapping\n"
-                    )
-                    mapped_departments.append(department)
-                else:
-                    mapped_departments.append(self.department_map[department])
+                mapped_departments.append(self.department_map[department])
             except KeyError:
                 logging.info(
                     f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
@@ -439,7 +392,7 @@ class UserImporter:  # noqa: R0902
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
                 )
                 logging.error(
-                    json.dumps(existing_user, ensure_ascii=False) + "\n"
+                    json.dumps(existing_user, ensure_ascii=False)
                 )
                 self.logs["failed"] += 1
                 return {}
@@ -453,7 +406,7 @@ class UserImporter:  # noqa: R0902
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
                 )
                 logging.error(
-                    json.dumps(user_obj, ensure_ascii=False) + "\n"
+                    json.dumps(user_obj, ensure_ascii=False)
                 )
                 self.logs["failed"] += 1
                 return {}
@@ -511,10 +464,8 @@ class UserImporter:  # noqa: R0902
                    the existing user object, the existing request preference object (existing_rp),
                    and the existing PU object (existing_pu).
         """
-        rp_obj = user_obj.pop("requestPreference", {})
-        spu_obj = user_obj.pop("servicePointsUser", {})
-        # rp_obj = user_obj.pop("requestPreference", {}) if "requestPreference" in user_obj else {}
-        # spu_obj = user_obj.pop("servicePointsUser") if "servicePointsUser" in user_obj else {}
+        rp_obj = user_obj.pop("requestPreference", {}) if "requestPreference" in user_obj else {}
+        spu_obj = user_obj.pop("servicePointsUser") if "servicePointsUser" in user_obj else {}
         existing_user = await self.get_existing_user(user_obj)
         if existing_user:
             existing_rp = await self.get_existing_rp(user_obj, existing_user)
@@ -665,7 +616,7 @@ class UserImporter:  # noqa: R0902
                         f"{str(getattr(getattr(ee, 'response', ee), 'text', str(ee)))}"
                     )
                     
-                    logging.info(rp_error_message + "\n")
+                    logging.info(rp_error_message)
                 if not existing_pu:
                     try:
                         await self.create_perms_user(new_user_obj)
@@ -676,7 +627,7 @@ class UserImporter:  # noqa: R0902
                             f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
                         )
                         
-                        logging.info(pu_error_message + "\n")
+                        logging.info(pu_error_message)
                 await self.handle_service_points_user(spu_obj, existing_spu, new_user_obj)
 
     async def map_service_points(self, spu_obj, existing_user):
@@ -694,13 +645,7 @@ class UserImporter:  # noqa: R0902
             mapped_service_points = []
             for sp in spu_obj.pop("servicePointsIds", []):
                 try:
-                    if self.validate_uuid(sp) and sp in self.service_point_map.values():
-                        await self.logfile.write(
-                            f"Service point {sp} is a UUID, skipping mapping\n"
-                        )
-                        mapped_service_points.append(sp)
-                    else:
-                        mapped_service_points.append(self.service_point_map[sp])
+                    mapped_service_points.append(self.service_point_map[sp])
                 except KeyError:
                     logging.error(
                         f'Service point "{sp}" not found, excluding service point from user: '
@@ -711,13 +656,7 @@ class UserImporter:  # noqa: R0902
         if "defaultServicePointId" in spu_obj:
             sp_code = spu_obj.pop('defaultServicePointId', '')
             try:
-                if self.validate_uuid(sp_code) and sp_code in self.service_point_map.values():
-                    await self.logfile.write(
-                        f"Default service point {sp_code} is a UUID, skipping mapping\n"
-                    )
-                    mapped_sp_id = sp_code
-                else:
-                    mapped_sp_id = self.service_point_map[sp_code]
+                mapped_sp_id = self.service_point_map[sp_code]
                 if mapped_sp_id not in spu_obj.get('servicePointsIds', []):
                     logging.error(
                         f'Default service point "{sp_code}" not found in assigned service points, '
@@ -740,7 +679,7 @@ class UserImporter:  # noqa: R0902
             existing_spu (dict): The existing service-points-user object, if it exists.
             existing_user (dict): The existing user object associated with the spu_obj.
         """
-        if spu_obj:
+        if spu_obj is not None:
             await self.map_service_points(spu_obj, existing_user)
             if existing_spu:
                 await self.update_existing_spu(spu_obj, existing_spu)
@@ -824,13 +763,12 @@ class UserImporter:  # noqa: R0902
                 duration = time.time() - start
                 async with self.lock:
                     message = (
-                        f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                         f"Batch of {self.batch_size} users processed in {duration:.2f} "
                         f"seconds. - Users created: {self.logs['created']} - Users updated: "
                         f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
                     )
                     
-                    logging.info(message + "\n")
+                    logging.info(message)
                 tasks = []
         if tasks:
             start = time.time()
@@ -838,13 +776,12 @@ class UserImporter:  # noqa: R0902
             duration = time.time() - start
             async with self.lock:
                 message = (
-                    f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                     f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
                     f"Users created: {self.logs['created']} - Users updated: "
                     f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
                 )
                 
-                logging.info(message + "\n")
+                logging.info(message)
 
 
 async def main() -> None:
@@ -925,6 +862,7 @@ async def main() -> None:
         default="002",
     )
     args = parser.parse_args()
+    report_file_base_path = args.report_file_base_path
 
     library_name = args.library_name
 
@@ -948,6 +886,13 @@ async def main() -> None:
         folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
 
     user_file_path = Path(args.user_file_path)
+    log_file_path = os.path.join(
+        report_file_base_path, f"log_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.log"
+    )
+    error_file_path = os.path.join(
+        report_file_base_path, f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
+    )
+    setup_logging(log_file_path, error_file_path)
     async with httpx.AsyncClient(timeout=None) as http_client:
         try:
             importer = UserImporter(
