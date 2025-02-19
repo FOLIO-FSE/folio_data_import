@@ -21,6 +21,7 @@ import pymarc
 import tabulate
 from humps import decamelize
 from tqdm import tqdm
+from zmq import has
 
 
 try:
@@ -459,34 +460,36 @@ class MARCImportJob:
                     await self.get_job_status()
                 sleep(1)
             if self.finished:
-                job_summary = await self.get_job_summary()
-                job_summary.pop("jobExecutionId")
-                job_summary.pop("totalErrors")
-                columns = ["Summary"] + list(job_summary.keys())
-                rows = set()
-                for key in columns[1:]:
-                    rows.update(job_summary[key].keys())
+                if job_summary := await self.get_job_summary():
+                    job_summary.pop("jobExecutionId")
+                    job_summary.pop("totalErrors")
+                    columns = ["Summary"] + list(job_summary.keys())
+                    rows = set()
+                    for key in columns[1:]:
+                        rows.update(job_summary[key].keys())
 
-                table_data = []
-                for row in rows:
-                    metric_name = decamelize(row).split("_")[1]
-                    table_row = [metric_name]
-                    for col in columns[1:]:
-                        table_row.append(job_summary[col].get(row, "N/A"))
-                    table_data.append(table_row)
-                table_data.sort(key=lambda x: REPORT_SUMMARY_ORDERING.get(x[0], 99))
-                columns = columns[:1] + [
-                    " ".join(decamelize(x).split("_")[:-1]) for x in columns[1:]
-                ]
-                print(
-                    f"Results for {'file' if len(self.current_file) == 1 else 'files'}: "
-                    f"{', '.join([os.path.basename(x.name) for x in self.current_file])}"
-                )
-                print(
-                    tabulate.tabulate(
-                        table_data, headers=columns, tablefmt="fancy_grid"
-                    ),
-                )
+                    table_data = []
+                    for row in rows:
+                        metric_name = decamelize(row).split("_")[1]
+                        table_row = [metric_name]
+                        for col in columns[1:]:
+                            table_row.append(job_summary[col].get(row, "N/A"))
+                        table_data.append(table_row)
+                    table_data.sort(key=lambda x: REPORT_SUMMARY_ORDERING.get(x[0], 99))
+                    columns = columns[:1] + [
+                        " ".join(decamelize(x).split("_")[:-1]) for x in columns[1:]
+                    ]
+                    print(
+                        f"Results for {'file' if len(self.current_file) == 1 else 'files'}: "
+                        f"{', '.join([os.path.basename(x.name) for x in self.current_file])}"
+                    )
+                    print(
+                        tabulate.tabulate(
+                            table_data, headers=columns, tablefmt="fancy_grid"
+                        ),
+                    )
+                else:
+                    print(f"No job summary available for job {self.job_id}.")
             self.last_current = 0
             self.finished = False
 
@@ -501,9 +504,14 @@ class MARCImportJob:
             self.current_retry_timeout = (
                 self.current_retry_timeout * RETRY_TIMEOUT_RETRY_FACTOR
             ) if self.current_retry_timeout else RETRY_TIMEOUT_START
-            job_summary = self.folio_client.folio_get(
-                f"/metadata-provider/jobSummary/{self.job_id}"
-            )
+            with httpx.Client(
+                timeout=self.current_retry_timeout,
+                verify=self.folio_client.ssl_verify
+            ) as temp_client:
+                self.folio_client.httpx_client = temp_client
+                job_summary = self.folio_client.folio_get(
+                    f"/metadata-provider/jobSummary/{self.job_id}"
+                )
             self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
             if not hasattr(e, "response") or e.response.status_code == 502:
@@ -514,6 +522,8 @@ class MARCImportJob:
                 ) as temp_client:
                     self.folio_client.httpx_client = temp_client
                     return await self.get_job_status()
+            elif hasattr(e, "response") and e.response.status_code == 504:
+                job_summary = {}
             else:
                 raise e
         return job_summary
