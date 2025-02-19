@@ -6,6 +6,7 @@ import json
 import os
 import time
 import logging
+import uuid
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Tuple
@@ -89,6 +90,23 @@ class UserImporter:  # noqa: R0902
             dict: A dictionary mapping reference data keys to their corresponding IDs.
         """
         return {x[name]: x["id"] for x in folio_client.folio_get_all(endpoint, key)}
+
+    @staticmethod
+    def validate_uuid(uuid_string: str) -> bool:
+        """
+        Validate a UUID string.
+
+        Args:
+            uuid_string (str): The UUID string to validate.
+
+        Returns:
+            bool: True if the UUID is valid, otherwise False.
+        """
+        try:
+            uuid.UUID(uuid_string)
+            return True
+        except ValueError:
+            return False
 
     async def do_import(self) -> None:
         """
@@ -199,10 +217,20 @@ class UserImporter:  # noqa: R0902
             mapped_addresses = []
             for address in addresses:
                 try:
-                    address["addressTypeId"] = self.address_type_map[
-                        address["addressTypeId"]
-                    ]
-                    mapped_addresses.append(address)
+                    if (
+                        self.validate_uuid(address["addressTypeId"])
+                        and address["addressTypeId"] in self.address_type_map.values()
+                    ):
+                        await self.logfile.write(
+                            f"Row {line_number}: Address type {address['addressTypeId']} is a UUID, "
+                            f"skipping mapping\n"
+                        )
+                        mapped_addresses.append(address)
+                    else:
+                        address["addressTypeId"] = self.address_type_map[
+                            address["addressTypeId"]
+                        ]
+                        mapped_addresses.append(address)
                 except KeyError:
                     if address["addressTypeId"] not in self.address_type_map.values():
                         logging.info(
@@ -224,7 +252,16 @@ class UserImporter:  # noqa: R0902
             None
         """
         try:
-            user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
+            if (
+                self.validate_uuid(user_obj["patronGroup"])
+                and user_obj["patronGroup"] in self.patron_group_map.values()
+            ):
+                await self.logfile.write(
+                    f"Row {line_number}: Patron group {user_obj['patronGroup']} is a UUID, "
+                    f"skipping mapping\n"
+                )
+            else:
+                user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
         except KeyError:
             if user_obj["patronGroup"] not in self.patron_group_map.values():
                 logging.info(
@@ -247,7 +284,16 @@ class UserImporter:  # noqa: R0902
         mapped_departments = []
         for department in user_obj.pop("departments", []):
             try:
-                mapped_departments.append(self.department_map[department])
+                if (
+                    self.validate_uuid(department)
+                    and department in self.department_map.values()
+                ):
+                    await self.logfile.write(
+                        f"Row {line_number}: Department {department} is a UUID, skipping mapping\n"
+                    )
+                    mapped_departments.append(department)
+                else:
+                    mapped_departments.append(self.department_map[department])
             except KeyError:
                 logging.info(
                     f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
@@ -645,7 +691,13 @@ class UserImporter:  # noqa: R0902
             mapped_service_points = []
             for sp in spu_obj.pop("servicePointsIds", []):
                 try:
-                    mapped_service_points.append(self.service_point_map[sp])
+                    if self.validate_uuid(sp) and sp in self.service_point_map.values():
+                        await self.logfile.write(
+                            f"Service point {sp} is a UUID, skipping mapping\n"
+                        )
+                        mapped_service_points.append(sp)
+                    else:
+                        mapped_service_points.append(self.service_point_map[sp])
                 except KeyError:
                     logging.error(
                         f'Service point "{sp}" not found, excluding service point from user: '
@@ -656,7 +708,13 @@ class UserImporter:  # noqa: R0902
         if "defaultServicePointId" in spu_obj:
             sp_code = spu_obj.pop('defaultServicePointId', '')
             try:
-                mapped_sp_id = self.service_point_map[sp_code]
+                if self.validate_uuid(sp_code) and sp_code in self.service_point_map.values():
+                    await self.logfile.write(
+                        f"Default service point {sp_code} is a UUID, skipping mapping\n"
+                    )
+                    mapped_sp_id = sp_code
+                else:
+                    mapped_sp_id = self.service_point_map[sp_code]
                 if mapped_sp_id not in spu_obj.get('servicePointsIds', []):
                     logging.error(
                         f'Default service point "{sp_code}" not found in assigned service points, '
@@ -679,7 +737,7 @@ class UserImporter:  # noqa: R0902
             existing_spu (dict): The existing service-points-user object, if it exists.
             existing_user (dict): The existing user object associated with the spu_obj.
         """
-        if spu_obj is not None:
+        if spu_obj:
             await self.map_service_points(spu_obj, existing_user)
             if existing_spu:
                 await self.update_existing_spu(spu_obj, existing_spu)
