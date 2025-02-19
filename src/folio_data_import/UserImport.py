@@ -464,8 +464,8 @@ class UserImporter:  # noqa: R0902
                    the existing user object, the existing request preference object (existing_rp),
                    and the existing PU object (existing_pu).
         """
-        rp_obj = user_obj.pop("requestPreference", {}) if "requestPreference" in user_obj else {}
-        spu_obj = user_obj.pop("servicePointsUser") if "servicePointsUser" in user_obj else {}
+        rp_obj = user_obj.pop("requestPreference", {})
+        spu_obj = user_obj.pop("servicePointsUser", {})
         existing_user = await self.get_existing_user(user_obj)
         if existing_user:
             existing_rp = await self.get_existing_rp(user_obj, existing_user)
