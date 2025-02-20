@@ -166,14 +166,17 @@ class MARCImportJob:
                 "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
             )
             self.current_retry_timeout = None
-        except (httpx.ConnectTimeout, httpx.ReadTimeout):
-            sleep(.25)
-            with httpx.Client(
-                timeout=self.current_retry_timeout,
-                verify=self.folio_client.ssl_verify
-            ) as temp_client:
-                self.folio_client.httpx_client = temp_client
-                return await self.get_job_status()
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError):
+            if not hasattr(e, "response") or e.response.status_code in [502, 504]:
+                sleep(.25)
+                with httpx.Client(
+                    timeout=self.current_retry_timeout,
+                    verify=self.folio_client.ssl_verify
+                ) as temp_client:
+                    self.folio_client.httpx_client = temp_client
+                    return await self.get_job_status()
+            else:
+                raise e
         try:
             status = [
                 job for job in job_status["jobExecutions"] if job["id"] == self.job_id
