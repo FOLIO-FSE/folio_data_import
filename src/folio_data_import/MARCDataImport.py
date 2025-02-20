@@ -3,6 +3,7 @@ import asyncio
 import glob
 import importlib
 import io
+import logging
 import os
 import sys
 from typing import List
@@ -21,7 +22,6 @@ import pymarc
 import tabulate
 from humps import decamelize
 from tqdm import tqdm
-from zmq import has
 
 
 try:
@@ -37,6 +37,7 @@ REPORT_SUMMARY_ORDERING = {"created": 0, "updated": 1, "discarded": 2, "error": 
 RETRY_TIMEOUT_START = 1
 RETRY_TIMEOUT_RETRY_FACTOR = 2
 
+logger = logging.getLogger(__name__)
 class MARCImportJob:
     """
     Class to manage importing MARC data (Bib, Authority) into FOLIO using the Change Manager
@@ -115,9 +116,9 @@ class MARCImportJob:
             "wb+",
         ) as failed_batches:
             self.bad_records_file = bad_marc_file
-            print(f"Writing bad records to {self.bad_records_file.name}")
+            logger.info(f"Writing bad records to {self.bad_records_file.name}")
             self.failed_batches_file = failed_batches
-            print(f"Writing failed batches to {self.failed_batches_file.name}")
+            logger.info(f"Writing failed batches to {self.failed_batches_file.name}")
             self.http_client = http_client
             if self.consolidate_files:
                 self.current_file = self.import_files
@@ -138,16 +139,16 @@ class MARCImportJob:
         Returns:
             None
         """
-        self.bad_records_file.seek(0)
-        if not self.bad_records_file.read(1):
-            os.remove(self.bad_records_file.name)
-            print("No bad records found. Removing bad records file.")
-        self.failed_batches_file.seek(0)
-        if not self.failed_batches_file.read(1):
-            os.remove(self.failed_batches_file.name)
-            print("No failed batches. Removing failed batches file.")
-        print("Import complete.")
-        print(f"Total records imported: {self.total_records_sent}")
+        with open(self.bad_records_file.name, "rb") as bad_records:
+            if not bad_records.read(1):
+                os.remove(bad_records.name)
+                logger.info("No bad records found. Removing bad records file.")
+        with open(self.failed_batches_file.name, "rb") as failed_batches:
+            if not failed_batches.read(1):
+                os.remove(failed_batches.name)
+                logger.info("No failed batches. Removing failed batches file.")
+        logger.info("Import complete.")
+        logger.info(f"Total records imported: {self.total_records_sent}")
 
     async def get_job_status(self) -> None:
         """
@@ -215,7 +216,7 @@ class MARCImportJob:
         try:
             create_job.raise_for_status()
         except httpx.HTTPError as e:
-            print(
+            logger.error(
                 "Error creating job: "
                 + str(e)
                 + "\n"
@@ -262,7 +263,7 @@ class MARCImportJob:
         try:
             set_job_profile.raise_for_status()
         except httpx.HTTPError as e:
-            print(
+            logger.error(
                 "Error creating job: "
                 + str(e)
                 + "\n"
@@ -318,7 +319,7 @@ class MARCImportJob:
                 self.record_batch = []
                 self.pbar_sent.update(len(batch_payload["initialRecords"]))
             else:
-                print("Error posting batch: " + str(e))
+                logger.error("Error posting batch: " + str(e))
                 for record in self.record_batch:
                     self.failed_batches_file.write(record)
                     self.error_records += len(self.record_batch)
@@ -384,18 +385,18 @@ class MARCImportJob:
                 module = importlib.import_module(module_path)
                 func = getattr(module, func_name)
             except (ImportError, AttributeError) as e:
-                print(f"Error importing preprocessing function {func_or_path}: {e}. Skipping preprocessing.")
+                logger.error(f"Error importing preprocessing function {func_or_path}: {e}. Skipping preprocessing.")
                 return record
         elif callable(func_or_path):
             func = func_or_path
         else:
-            print(f"Invalid preprocessing function: {func_or_path}. Skipping preprocessing.")
+            logger.warning(f"Invalid preprocessing function: {func_or_path}. Skipping preprocessing.")
             return record
 
         try:
             return func(record)
         except Exception as e:
-            print(f"Error applying preprocessing function: {e}. Skipping preprocessing.")
+            logger.error(f"Error applying preprocessing function: {e}. Skipping preprocessing.")
             return record
 
     async def create_batch_payload(self, counter, total_records, is_last) -> dict:
@@ -484,17 +485,17 @@ class MARCImportJob:
                     columns = columns[:1] + [
                         " ".join(decamelize(x).split("_")[:-1]) for x in columns[1:]
                     ]
-                    print(
+                    logger.info(
                         f"Results for {'file' if len(self.current_file) == 1 else 'files'}: "
                         f"{', '.join([os.path.basename(x.name) for x in self.current_file])}"
                     )
-                    print(
+                    logger.info("\n" +
                         tabulate.tabulate(
                             table_data, headers=columns, tablefmt="fancy_grid"
                         ),
                     )
                 else:
-                    print(f"No job summary available for job {self.job_id}.")
+                    logger.error(f"No job summary available for job {self.job_id}.")
             self.last_current = 0
             self.finished = False
 
@@ -541,6 +542,23 @@ async def main() -> None:
     This function parses command line arguments, initializes the FolioClient,
     and runs the MARCImportJob.
     """
+
+    # Set up logging
+    file_handler = logging.FileHandler('folio_data_import_{}.log'.format(dt.now().strftime('%Y%m%d%H%M%S')))
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stderr),
+            file_handler
+        ]
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--gateway_url", type=str, help="The FOLIO API Gateway URL")
     parser.add_argument("--tenant_id", type=str, help="The FOLIO tenant ID")
@@ -621,10 +639,10 @@ async def main() -> None:
     marc_files.sort()
 
     if len(marc_files) == 0:
-        print(f"No files found matching {args.marc_file_path}. Exiting.")
+        logger.critical(f"No files found matching {args.marc_file_path}. Exiting.")
         sys.exit(1)
     else:
-        print(marc_files)
+        logger.info(marc_files)
 
     if not args.import_profile_name:
         import_profiles = folio_client.folio_get(
@@ -659,7 +677,7 @@ async def main() -> None:
             let_summary_fail=bool(args.let_summary_fail),
         ).do_work()
     except Exception as e:
-        print("Error importing files: " + str(e))
+        logger.error("Error importing files: " + str(e))
         raise
 
 
