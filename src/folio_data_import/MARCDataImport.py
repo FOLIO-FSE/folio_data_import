@@ -78,9 +78,11 @@ class MARCImportJob:
         marc_record_preprocessor=None,
         consolidate=False,
         no_progress=False,
+        let_summary_fail=False,
     ) -> None:
         self.consolidate_files = consolidate
         self.no_progress = no_progress
+        self.let_summary_fail = let_summary_fail
         self.folio_client: folioclient.FolioClient = folio_client
         self.import_files = marc_files
         self.import_profile_name = import_profile_name
@@ -517,7 +519,7 @@ class MARCImportJob:
                 )
             self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
-            if not hasattr(e, "response") or e.response.status_code == 502:
+            if not hasattr(e, "response") or (e.response.status_code in [502, 504] and not self.let_summary_fail):
                 sleep(.25)
                 with httpx.Client(
                     timeout=self.current_retry_timeout,
@@ -525,7 +527,7 @@ class MARCImportJob:
                 ) as temp_client:
                     self.folio_client.httpx_client = temp_client
                     return await self.get_job_status()
-            elif hasattr(e, "response") and e.response.status_code == 504:
+            elif hasattr(e, "response") and (e.response.status_code in [502, 504] and self.let_summary_fail):
                 job_summary = {}
             else:
                 raise e
@@ -595,6 +597,11 @@ async def main() -> None:
         action="store_true",
         help="Disable progress bars (eg. for running in a CI environment)",
     )
+    parser.add_argument(
+        "--let-summary-fail",
+        action="store_true",
+        help="Do not retry fetching the final job summary if it fails",
+    )
     args = parser.parse_args()
     if not args.password:
         args.password = getpass("Enter FOLIO password: ")
@@ -649,6 +656,7 @@ async def main() -> None:
             marc_record_preprocessor=args.preprocessor,
             consolidate=bool(args.consolidate),
             no_progress=bool(args.no_progress),
+            let_summary_fail=bool(args.let_summary_fail),
         ).do_work()
     except Exception as e:
         print("Error importing files: " + str(e))
