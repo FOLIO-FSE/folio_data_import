@@ -1,4 +1,8 @@
 import pymarc
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def prepend_prefix_001(record: pymarc.Record, prefix: str) -> pymarc.Record:
     """
@@ -81,4 +85,25 @@ def sudoc_supercede_prep(record: pymarc.Record) -> pymarc.Record:
                 ]
             )
             record.add_ordered_field(_935)
+    return record
+
+def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
+    """
+    Remove all empty fields from the record.
+
+    Args:
+        record (pymarc.Record): The MARC record to preprocess.
+
+    Returns:
+        pymarc.Record: The preprocessed MARC record.
+    """
+    for field in list(record.get_fields()):
+        len_subs = len(field.subfields)
+        subfield_value = bool(field.subfields[0].value) if len_subs > 0 else False
+        if int(field.tag) > 9 and len(field.subfields) == 0:
+            logger.log(26, "DATA ISSUE\t%s\t%s\t%s", record["001"].value(), f"{field.tag} is empty", field)
+            record.remove_field(field)
+        if len_subs == 1 and not subfield_value:
+            logger.log(26, "DATA ISSUE\t%s\t%s\t%s", record["001"].value(), f"{field.tag}${field.subfields[0].code} is empty", field)
+            record.remove_field(field)
     return record

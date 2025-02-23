@@ -91,6 +91,8 @@ class MARCImportJob:
         self.batch_delay = batch_delay
         self.current_retry_timeout = None
         self.marc_record_preprocessor = marc_record_preprocessor
+        self.pbar_sent: tqdm
+        self.pbar_imported: tqdm
 
     async def do_work(self) -> None:
         """
@@ -169,7 +171,7 @@ class MARCImportJob:
                 "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
             )
             self.current_retry_timeout = None
-        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError):
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
             if not hasattr(e, "response") or e.response.status_code in [502, 504]:
                 sleep(.25)
                 with httpx.Client(
@@ -305,7 +307,7 @@ class MARCImportJob:
                 headers=self.folio_client.okapi_headers,
                 json=batch_payload,
             )
-        except httpx.ReadTimeout:
+        except (httpx.ConnectTimeout, httpx.ReadTimeout):
             sleep(.25)
             return await self.process_record_batch(batch_payload)
         try:
@@ -341,6 +343,7 @@ class MARCImportJob:
         """
         counter = 0
         for import_file in files:
+            file_path = Path(import_file.name)
             self.pbar_sent.set_description(
                 f"Sent ({os.path.basename(import_file.name)}): "
             )
@@ -365,6 +368,12 @@ class MARCImportJob:
                 await self.process_record_batch(
                     await self.create_batch_payload(counter, total_records, True),
                 )
+            import_complete_path = file_path.parent.joinpath("import_complete")
+            import_complete_path.mkdir(exist_ok=True)
+            logger.debug(f"Moving {file_path} to {import_complete_path.absolute()}")
+            file_path.rename(
+                file_path.parent.joinpath("import_complete", file_path.name)
+            )
 
     @staticmethod
     async def apply_marc_record_preprocessing(record: pymarc.Record, func_or_path) -> pymarc.Record:
@@ -467,8 +476,8 @@ class MARCImportJob:
                 sleep(1)
             if self.finished:
                 if job_summary := await self.get_job_summary():
-                    job_summary.pop("jobExecutionId")
-                    job_summary.pop("totalErrors")
+                    job_id = job_summary.pop("jobExecutionId", None)
+                    total_errors = job_summary.pop("totalErrors", 0)
                     columns = ["Summary"] + list(job_summary.keys())
                     rows = set()
                     for key in columns[1:]:
@@ -494,6 +503,8 @@ class MARCImportJob:
                             table_data, headers=columns, tablefmt="fancy_grid"
                         ),
                     )
+                    if total_errors:
+                        logger.info(f"Total errors: {total_errors}. Job ID: {job_id}.")
                 else:
                     logger.error(f"No job summary available for job {self.job_id}.")
             self.last_current = 0
