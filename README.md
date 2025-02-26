@@ -78,11 +78,11 @@ Unlike mod-user-import, this importer does not require `externalSystemId` as the
 
 #### Preferred Contact Type Mapping
 
-Another point of departure from the behavior of `mod-user-import` is the handling of `preferredContactTypeId`. This importer will accept either the `"001", "002", "003"...` values stored by the FOLIO, or the human-friendly strings used by `mod-user-import` (`"mail", "email", "text", "phone", "mobile"`). It will also __*set a customizable default for all users that do not otherwise have a valid value specified*__ (using `--default_preferred_contact_type`), unless a (valid) value is already present in the user record being updated.
+Another point of departure from the behavior of `mod-user-import` is the handling of `preferredContactTypeId`. This importer will accept either the `"001", "002", "003"...` values stored by FOLIO, or the human-friendly strings used by `mod-user-import` (`"mail", "email", "text", "phone", "mobile"`). It will also __*set a customizable default for all users that do not otherwise have a valid value specified*__ (using `--default_preferred_contact_type`), unless a (valid) value is already present in the user record being updated.
 
 #### Field Protection (*experimental*)
 
-This script offers a rudimentary field protection implementation using custom fields. To enable this functionality, create a text custom field that has the field name `protectedFields`. In this field, you ca specify a comma-separated list of User schema field names, using dot-notation for nested fields. This protection should support all standard fields except addresses within `personal.addresses`. If you include `personal.addresses` in a user record, any existing addresses will be replaced by the new values.
+This script offers a rudimentary field protection implementation using custom fields. To enable this functionality, create a text custom field that has the field name `protectedFields`. In this field, you can specify a comma-separated list of User schema field names, using dot-notation for nested fields. This protection should support all standard fields except addresses within `personal.addresses`. If you include `personal.addresses` in a user record, any existing addresses will be replaced by the new values.
 
 ##### Example
 
