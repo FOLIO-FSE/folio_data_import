@@ -106,6 +106,8 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
     MAPPED_FIELDS = {
         "010": ["a", "z"],
         "020": ["a", "y", "z"],
+        "035": ["a", "z"],
+        "040": ["a", "b", "c", "d", "e", "f", "g", "h", "k", "m", "n", "p", "r", "s"],
         "050": ["a", "b"],
         "082": ["a", "b"],
         "100": ["a", "b", "c", "d", "q"],
@@ -128,6 +130,8 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
             "y",
             "z",
         ],
+        "180": ["x", "y", "z"],
+        "210": ["a", "c"],
         "240": ["a", "f", "k", "l", "m", "n", "o", "p", "r", "s", "t", "x", "y", "z"],
         "245": ["a", "b", "c", "f", "g", "h", "k", "n", "p", "s"],
         "246": ["a", "f", "g", "n", "p", "s"],
