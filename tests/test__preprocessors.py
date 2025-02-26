@@ -1,3 +1,4 @@
+from multiprocessing import Value
 from unittest.mock import Mock
 from folioclient import FolioClient
 import pytest
@@ -54,6 +55,16 @@ def test_clean_empty_fields():
         pymarc.field.Subfield('a', '')
     ])
     record.add_field(bad_010)
+    bad_020 = pymarc.Field(tag='020', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', ''),
+        pymarc.field.Subfield('y', '0123-4567'),
+    ])
+    record.add_field(bad_020)
+    empty_020 = pymarc.Field(tag='020', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', ''),
+        pymarc.field.Subfield('y', ''),
+    ])
+    record.add_field(empty_020)
     good_035 = pymarc.Field(tag='035', indicators=[' ', ' '], subfields=[
         pymarc.field.Subfield('a', 'ocn123456789')
     ])
@@ -90,3 +101,8 @@ def test_clean_empty_fields():
     assert len(record.get_fields('650')) == 1
     assert len(record.get_fields('180')) == 1
     assert len(record.get_fields('245')) == 1
+    assert len(record.get_fields('020')) == 1
+    with pytest.raises(KeyError):
+        record['020']['a']
+    assert record["020"].get("y", "") == "0123-4567"
+
