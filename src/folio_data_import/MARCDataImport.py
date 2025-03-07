@@ -183,11 +183,15 @@ class MARCImportJob:
                 if self.current_retry_timeout
                 else RETRY_TIMEOUT_START
             )
-            job_status = self.folio_client.folio_get(
-                "/metadata-provider/jobExecutions?statusNot=DISCARDED&uiStatusAny"
-                "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
-            )
-            self.current_retry_timeout = None
+            with httpx.Client(
+                timeout=self.current_retry_timeout,
+                verify=self.folio_client.ssl_verify,
+            ) as temp_client:
+                job_status = self.folio_client.folio_get(
+                    "/metadata-provider/jobExecutions?statusNot=DISCARDED&uiStatusAny"
+                    "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
+                )
+                self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
             if not hasattr(e, "response") or e.response.status_code in [502, 504]:
                 error_text = e.response.text if hasattr(e, "response") else str(e)
@@ -201,13 +205,17 @@ class MARCImportJob:
                     return await self.get_job_status()
             else:
                 raise e
+        except Exception as e:
+            logger.error(f"Error fetching job status. {e}")
+
         try:
             status = [
                 job for job in job_status["jobExecutions"] if job["id"] == self.job_id
             ][0]
             self.pbar_imported.update(status["progress"]["current"] - self.last_current)
             self.last_current = status["progress"]["current"]
-        except IndexError:
+        except (IndexError, ValueError, KeyError):
+            logger.debug(f"No active job found with ID {self.job_id}. Checking for finished job.")
             try:
                 job_status = self.folio_client.folio_get(
                     "/metadata-provider/jobExecutions?limit=100&sortBy=completed_date%2Cdesc&statusAny"
@@ -245,21 +253,26 @@ class MARCImportJob:
         Raises:
             HTTPError: If there is an error creating the job.
         """
-        create_job = self.http_client.post(
-            self.folio_client.okapi_url + "/change-manager/jobExecutions",
-            headers=self.folio_client.okapi_headers,
-            json={"sourceType": "ONLINE", "userId": self.folio_client.current_user},
-        )
         try:
-            create_job.raise_for_status()
-        except httpx.HTTPError as e:
-            logger.error(
-                "Error creating job: "
-                + str(e)
-                + "\n"
-                + getattr(getattr(e, "response", ""), "text", "")
+            create_job = self.http_client.post(
+                self.folio_client.okapi_url + "/change-manager/jobExecutions",
+                headers=self.folio_client.okapi_headers,
+                json={"sourceType": "ONLINE", "userId": self.folio_client.current_user},
             )
-            raise e
+            create_job.raise_for_status()
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
+            if not hasattr(e, "response") or e.response.status_code in [502, 504]:
+                logger.warning(f"SERVER ERROR creating job: {e}. Retrying.")
+                sleep(0.25)
+                return await self.create_folio_import_job()
+            else:
+                logger.error(
+                    "Error creating job: "
+                    + str(e)
+                    + "\n"
+                    + getattr(getattr(e, "response", ""), "text", "")
+                )
+                raise e
         self.job_id = create_job.json()["parentJobExecutionId"]
         logger.info("Created job: " + self.job_id)
 
@@ -432,7 +445,7 @@ class MARCImportJob:
                     ),
                 )
             import_complete_path = file_path.parent.joinpath("import_complete")
-            if import_complete_path.exists():
+            if not import_complete_path.exists():
                 logger.debug(f"Creating import_complete directory: {import_complete_path.absolute()}")
                 import_complete_path.mkdir(exist_ok=True)
             logger.debug(f"Moving {file_path} to {import_complete_path.absolute()}")
@@ -455,31 +468,42 @@ class MARCImportJob:
             pymarc.Record: The preprocessed MARC record.
         """
         if isinstance(func_or_path, str):
-            try:
-                path_parts = func_or_path.rsplit(".")
-                module_path, func_name = ".".join(path_parts[:-1]), path_parts[-1]
-                module = importlib.import_module(module_path)
-                func = getattr(module, func_name)
-            except (ImportError, AttributeError) as e:
-                logger.error(
-                    f"Error importing preprocessing function {func_or_path}: {e}. Skipping preprocessing."
+            func_paths = func_or_path.split(",")
+            for func_path in func_paths:
+                record = await MARCImportJob._apply_single_marc_record_preprocessing_by_path(
+                    record, func_path
                 )
-                return record
         elif callable(func_or_path):
-            func = func_or_path
+            record = func_or_path(record)
         else:
             logger.warning(
                 f"Invalid preprocessing function: {func_or_path}. Skipping preprocessing."
             )
-            return record
+        return record
 
+    async def _apply_single_marc_record_preprocessing_by_path(
+        record: pymarc.Record, func_path: str
+    ) -> pymarc.Record:
+        """
+        Apply a single preprocessing function to the MARC record.
+
+        Args:
+            record (pymarc.Record): The MARC record to preprocess.
+            func_path (str): The path to the preprocessing function.
+
+        Returns:
+            pymarc.Record: The preprocessed MARC record.
+        """
         try:
-            return func(record)
+            module_path, func_name = func_path.rsplit(".", 1)
+            module = importlib.import_module(module_path)
+            func = getattr(module, func_name)
+            record = func(record)
         except Exception as e:
-            logger.error(
-                f"Error applying preprocessing function: {e}. Skipping preprocessing."
+            logger.warning(
+                f"Error applying preprocessing function {func_path}: {e}. Skipping."
             )
-            return record
+        return record
 
     async def create_batch_payload(self, counter, total_records, is_last) -> dict:
         """
@@ -667,6 +691,7 @@ def set_up_cli_logging():
         "marc_import_data_issues_{}.log".format(dt.now().strftime("%Y%m%d%H%M%S"))
     )
     data_issues_handler.setLevel(26)
+    data_issues_handler.addFilter(IncludeLevelFilter(DATA_ISSUE_LVL_NUM))
     data_issues_formatter = logging.Formatter("%(message)s")
     data_issues_handler.setFormatter(data_issues_formatter)
     logger.addHandler(data_issues_handler)

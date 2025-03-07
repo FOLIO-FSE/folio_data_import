@@ -219,7 +219,7 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
                     26,
                     "DATA ISSUE\t%s\t%s\t%s",
                     record["001"].value(),
-                    f"{field.tag} is empty",
+                    f"{field.tag} is empty, removing field",
                     field,
                 )
                 record.remove_field(field)
@@ -228,7 +228,7 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
                     26,
                     "DATA ISSUE\t%s\t%s\t%s",
                     record["001"].value(),
-                    f"{field.tag}${field.subfields[0].code} is empty, removing field",
+                    f"{field.tag}${field.subfields[0].code} is empty, no other subfields present, removing field",
                     field,
                 )
                 record.remove_field(field)
@@ -238,12 +238,15 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
                         26,
                         "DATA ISSUE\t%s\t%s\t%s",
                         record["001"].value(),
-                        f"{field.tag}$a is empty, removing field",
+                        f"{field.tag}$a is empty, removing subfield",
                         field,
                     )
                     field.delete_subfield("a")
                 for idx, subfield in enumerate(list(field.subfields), start=1):
-                    if subfield.code in MAPPED_FIELDS.get(field.tag, []) and not subfield.value:
+                    if (
+                        subfield.code in MAPPED_FIELDS.get(field.tag, [])
+                        and not subfield.value
+                    ):
                         logger.log(
                             26,
                             "DATA ISSUE\t%s\t%s\t%s",
@@ -261,6 +264,40 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
                         field,
                     )
                     record.remove_field(field)
+    return record
+
+
+def fix_leader(record: pymarc.Record) -> pymarc.Record:
+    """
+    Fixes the leader of the record by setting the record status to 'c' (modified
+    record) and the type of record to 'a' (language material).
+
+    Args:
+        record (pymarc.Record): The MARC record to preprocess.
+
+    Returns:
+        pymarc.Record: The preprocessed MARC record.
+    """
+    VALID_STATUSES = ["a", "c", "d", "n", "p"]
+    VALID_TYPES = ["a", "c", "d", "e", "f", "g", "i", "j", "k", "m", "o", "p", "r", "t"]
+    if record.leader[5] not in VALID_STATUSES:
+        logger.log(
+            26,
+            "DATA ISSUE\t%s\t%s\t%s",
+            record["001"].value(),
+            f"Invalid record status: {record.leader[5]}, setting to 'c'",
+            record,
+        )
+        record.leader = pymarc.Leader(record.leader[:5] + "c" + record.leader[6:])
+    if record.leader[6] not in VALID_TYPES:
+        logger.log(
+            26,
+            "DATA ISSUE\t%s\t%s\t%s",
+            record["001"].value(),
+            f"Invalid record type: {record.leader[6]}, setting to 'a'",
+            record,
+        )
+        record.leader = pymarc.Leader(record.leader[:6] + "a" + record.leader[7:])
     return record
 
 
