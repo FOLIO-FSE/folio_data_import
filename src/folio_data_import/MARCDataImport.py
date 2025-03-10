@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import datetime
-from email import message
 import glob
 import importlib
 import io
