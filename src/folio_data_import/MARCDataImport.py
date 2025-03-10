@@ -103,6 +103,8 @@ class MARCImportJob:
         self.marc_record_preprocessor = marc_record_preprocessor
         self.pbar_sent: tqdm
         self.pbar_imported: tqdm
+        self._max_summary_retries: int = 2
+        self._summary_retries: int = 0
 
     async def do_work(self) -> None:
         """
@@ -632,7 +634,7 @@ class MARCImportJob:
             self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
-            if not hasattr(e, "response") or (
+            if (self._max_summary_retries > self._summary_retries and not hasattr(e, "response")) or (
                 e.response.status_code in [502, 504] and not self.let_summary_fail
             ):
                 logger.warning(f"SERVER ERROR fetching job summary: {e}. Retrying.")
@@ -642,9 +644,10 @@ class MARCImportJob:
                     verify=self.folio_client.ssl_verify,
                 ) as temp_client:
                     self.folio_client.httpx_client = temp_client
+                    self._summary_retries += 1
                     return await self.get_job_summary()
-            elif hasattr(e, "response") and (
-                e.response.status_code in [502, 504] and self.let_summary_fail
+            elif (self._summary_retries >= self._max_summary_retries) or (hasattr(e, "response") and (
+                e.response.status_code in [502, 504] and self.let_summary_fail)
             ):
                 logger.warning(
                     f"SERVER ERROR fetching job summary: {error_text}. Skipping final summary check."
