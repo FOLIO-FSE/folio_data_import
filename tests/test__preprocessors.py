@@ -106,3 +106,37 @@ def test_clean_empty_fields():
         record['020']['a']
     assert record["020"].get("y", "") == "0123-4567"
 
+def test_fix_leader():
+    record = pymarc.Record()
+    record.leader = pymarc.Leader('01234mbm a2200349 a 4500')
+    fields=[
+        pymarc.Field(tag='001', data='123456'),
+        pymarc.Field(tag='035', indicators=[' ', ' '], subfields=[
+            pymarc.field.Subfield('a', 'ocn123456789')
+        ]),
+        pymarc.Field(tag='245', indicators=pymarc.Indicators(*[' ', ' ']), subfields=[
+            pymarc.field.Subfield('a', 'Test: '),
+            pymarc.field.Subfield('b', 'a test / '),
+            pymarc.field.Subfield('c', 'by Test')
+        ])
+    ]
+    for field in fields:
+        record.add_field(field)
+    record = fix_leader(record)
+    assert record.leader[5] == 'c'
+    assert record.leader[6] == 'a'
+
+
+def test_clean_999_fields():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='123456'))
+    record.add_field(pymarc.Field(tag='999', indicators=['f', 'f'], subfields=[
+        pymarc.field.Subfield('i', 'Test')
+    ]))
+    record.add_field(pymarc.Field(tag='999', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('i', 'Test')
+    ]))
+    record = clean_999_fields(record)
+    assert len(record.get_fields('999')) == 0
+    assert len(record.get_fields('945')) == 1
+    assert record['945'].indicators == pymarc.Indicators(*[' ', ' '])

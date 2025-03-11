@@ -63,6 +63,29 @@ def strip_999_ff_fields(record: pymarc.Record) -> pymarc.Record:
             record.remove_field(field)
     return record
 
+def clean_999_fields(record: pymarc.Record) -> pymarc.Record:
+    """
+    The presence of 999 fields, with or without ff indicators, can cause
+    issues with data import mapping in FOLIO. This function calls strip_999_ff_fields
+    to remove 999 fields with ff indicators and then copies the remaining 999 fields
+    to 945 fields.
+
+    Args:
+        record (pymarc.Record): The MARC record to preprocess.
+
+    Returns:
+        pymarc.Record: The preprocessed MARC record.
+    """
+    record = strip_999_ff_fields(record)
+    for field in record.get_fields("999"):
+        _945 = pymarc.Field(
+            tag="945",
+            indicators=field.indicators,
+            subfields=field.subfields,
+        )
+        record.add_ordered_field(_945)
+        record.remove_field(field)
+    return record
 
 def sudoc_supercede_prep(record: pymarc.Record) -> pymarc.Record:
     """
