@@ -388,6 +388,7 @@ class MARCImportJob:
                     self.error_records += len(self.record_batch)
                     self.pbar_sent.total = self.pbar_sent.total - len(self.record_batch)
                 self.record_batch = []
+        await self.get_job_status()
         sleep(self.batch_delay)
 
     async def process_records(self, files, total_records) -> None:
@@ -419,7 +420,6 @@ class MARCImportJob:
                             == (total_records - self.error_records),
                         ),
                     )
-                    await self.get_job_status()
                     sleep(0.25)
                 if record:
                     if self.marc_record_preprocessor:
