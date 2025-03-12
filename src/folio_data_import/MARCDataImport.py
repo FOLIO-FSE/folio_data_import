@@ -634,8 +634,8 @@ class MARCImportJob:
             self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
-            if (self._max_summary_retries > self._summary_retries and not hasattr(e, "response")) or (
-                e.response.status_code in [502, 504] and not self.let_summary_fail
+            if (self._max_summary_retries > self._summary_retries) and (not hasattr(e, "response") or (
+                hasattr(e, "response") and e.response.status_code in [502, 504]) and not self.let_summary_fail
             ):
                 logger.warning(f"SERVER ERROR fetching job summary: {e}. Retrying.")
                 sleep(0.25)
