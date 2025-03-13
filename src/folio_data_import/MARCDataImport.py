@@ -327,7 +327,8 @@ class MARCImportJob:
             )
             raise e
 
-    async def read_total_records(self, files) -> int:
+    @staticmethod
+    async def read_total_records(files) -> int:
         """
         Reads the total number of records from the given files.
 
