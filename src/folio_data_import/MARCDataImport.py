@@ -105,6 +105,8 @@ class MARCImportJob:
         self.pbar_imported: tqdm
         self._max_summary_retries: int = 2
         self._summary_retries: int = 0
+        self.job_id: str = ""
+        self.job_hrid: int = 0
 
     async def do_work(self) -> None:
         """
@@ -275,7 +277,7 @@ class MARCImportJob:
                 )
                 raise e
         self.job_id = create_job.json()["parentJobExecutionId"]
-        logger.info("Created job: " + self.job_id)
+        logger.info(f"Created job: {self.job_id}")
 
     @cached_property
     def import_profile(self) -> dict:
@@ -318,6 +320,8 @@ class MARCImportJob:
         )
         try:
             set_job_profile.raise_for_status()
+            self.job_hrid = set_job_profile.json()['hrId']
+            logger.info(f"Job HRID: {self.job_hrid}")
         except httpx.HTTPError as e:
             logger.error(
                 "Error creating job: "
@@ -557,7 +561,7 @@ class MARCImportJob:
             total_records = await self.read_total_records(files)
             with (
                 tqdm(
-                    desc="Imported: ",
+                    desc=f"Imported ({self.job_hrid}): ",
                     total=total_records,
                     position=1,
                     disable=self.no_progress,
