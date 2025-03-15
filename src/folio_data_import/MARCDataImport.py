@@ -5,6 +5,7 @@ import glob
 import importlib
 import io
 import logging
+import math
 import os
 import sys
 import uuid
@@ -14,7 +15,7 @@ from functools import cached_property
 from getpass import getpass
 from pathlib import Path
 from time import sleep
-from typing import List
+from typing import List, Union
 
 import folioclient
 import httpx
@@ -78,6 +79,11 @@ class MARCImportJob:
     last_current: int = 0
     total_records_sent: int = 0
     finished: bool = False
+    job_id: str = ""
+    job_hrid: int = 0
+    current_file: Union[List[Path],List[io.BytesIO]] = []
+    _max_summary_retries: int = 2
+    _summary_retries: int = 0
 
     def __init__(
         self,
@@ -90,8 +96,14 @@ class MARCImportJob:
         consolidate=False,
         no_progress=False,
         let_summary_fail=False,
+        split_files=False,
+        split_size=1000,
     ) -> None:
         self.consolidate_files = consolidate
+        self.split_files = split_files
+        self.split_size = split_size
+        if self.split_files and self.consolidate_files:
+            raise ValueError("Cannot consolidate and split files at the same time.")
         self.no_progress = no_progress
         self.let_summary_fail = let_summary_fail
         self.folio_client: folioclient.FolioClient = folio_client
@@ -101,12 +113,6 @@ class MARCImportJob:
         self.batch_delay = batch_delay
         self.current_retry_timeout = None
         self.marc_record_preprocessor = marc_record_preprocessor
-        self.pbar_sent: tqdm
-        self.pbar_imported: tqdm
-        self._max_summary_retries: int = 2
-        self._summary_retries: int = 0
-        self.job_id: str = ""
-        self.job_hrid: int = 0
 
     async def do_work(self) -> None:
         """
@@ -143,6 +149,18 @@ class MARCImportJob:
             if self.consolidate_files:
                 self.current_file = self.import_files
                 await self.import_marc_file()
+            elif self.split_files:
+                for file in self.import_files:
+                    with open(file, "rb") as f:
+                        file_length = await self.read_total_records([f])
+                    expected_batches = math.ceil(file_length /self.split_size)
+                    logger.info(f"{file.name} contains {file_length} records. Splitting into {expected_batches} {self.split_size} record batches.")
+                    zero_pad_parts = len(str(expected_batches)) if expected_batches > 1 else 2
+                    for idx, batch in enumerate(self.split_marc_file(file, self.split_size), start=1):
+                        batch.name = f"{file.name}_part{idx:0{zero_pad_parts}}"
+                        self.current_file = [batch]
+                        await self.import_marc_file()
+                    self.move_file_to_complete(file)
             else:
                 for file in self.import_files:
                     self.current_file = [file]
@@ -450,12 +468,16 @@ class MARCImportJob:
                         == (total_records - self.error_records),
                     ),
                 )
-            import_complete_path = file_path.parent.joinpath("import_complete")
-            if not import_complete_path.exists():
-                logger.debug(f"Creating import_complete directory: {import_complete_path.absolute()}")
-                import_complete_path.mkdir(exist_ok=True)
-            logger.debug(f"Moving {file_path} to {import_complete_path.absolute()}")
-            file_path.rename(
+            if not self.split_files:
+                self.move_file_to_complete(file_path)
+
+    def move_file_to_complete(self, file_path):
+        import_complete_path = file_path.parent.joinpath("import_complete")
+        if not import_complete_path.exists():
+            logger.debug(f"Creating import_complete directory: {import_complete_path.absolute()}")
+            import_complete_path.mkdir(exist_ok=True)
+        logger.debug(f"Moving {file_path} to {import_complete_path.absolute()}")
+        file_path.rename(
                 file_path.parent.joinpath("import_complete", file_path.name)
             )
 
@@ -534,6 +556,46 @@ class MARCImportJob:
             "initialRecords": [{"record": x.decode()} for x in self.record_batch],
         }
 
+    @staticmethod
+    def split_marc_file(file_path, batch_size):
+        """Generator to iterate over MARC records in batches, yielding BytesIO objects."""
+        with open(file_path, "rb") as f:
+            batch = io.BytesIO()
+            count = 0
+
+            while True:
+                leader = f.read(24)
+                if not leader:
+                    break  # End of file
+
+                try:
+                    record_length = int(leader[:5])  # Extract record length from leader
+                except ValueError:
+                    raise ValueError("Invalid MARC record length encountered.")
+
+                record_body = f.read(record_length - 24)
+                if len(record_body) != record_length - 24:
+                    raise ValueError("Unexpected end of file while reading MARC record.")
+
+                # Verify record terminator
+                if record_body[-1:] != b'\x1D':
+                    raise ValueError("MARC record does not end with the expected terminator (0x1D).")
+
+                # Write the full record to the batch buffer
+                batch.write(leader + record_body)
+                count += 1
+
+                if count >= batch_size:
+                    batch.seek(0)
+                    yield batch
+                    batch = io.BytesIO()  # Reset buffer
+                    count = 0
+
+            # Yield any remaining records
+            if count > 0:
+                batch.seek(0)
+                yield batch
+
     async def import_marc_file(self) -> None:
         """
         Imports MARC file into the system.
@@ -555,9 +617,20 @@ class MARCImportJob:
         await self.create_folio_import_job()
         await self.set_job_profile()
         with ExitStack() as stack:
-            files = [
-                stack.enter_context(open(file, "rb")) for file in self.current_file
-            ]
+            try:
+                if isinstance(self.current_file[0], Path):
+                    files = [
+                        stack.enter_context(open(file, "rb")) for file in self.current_file
+                    ]
+                elif isinstance(self.current_file[0], io.BytesIO):
+                    files = [
+                        stack.enter_context(file) for file in self.current_file
+                        ]
+                else:
+                    raise ValueError("Invalid file type. Must be Path or BytesIO.")
+            except IndexError as e:
+                logger.error(f"Error opening file: {e}")
+                raise e
             total_records = await self.read_total_records(files)
             with (
                 tqdm(
@@ -580,41 +653,44 @@ class MARCImportJob:
                     await self.get_job_status()
                 sleep(1)
             if self.finished:
-                if job_summary := await self.get_job_summary():
-                    job_id = job_summary.pop("jobExecutionId", None)
-                    total_errors = job_summary.pop("totalErrors", 0)
-                    columns = ["Summary"] + list(job_summary.keys())
-                    rows = set()
-                    for key in columns[1:]:
-                        rows.update(job_summary[key].keys())
+                await self.log_job_summary()
+            self.last_current = 0
+            self.finished = False
 
-                    table_data = []
-                    for row in rows:
-                        metric_name = decamelize(row).split("_")[1]
-                        table_row = [metric_name]
-                        for col in columns[1:]:
-                            table_row.append(job_summary[col].get(row, "N/A"))
-                        table_data.append(table_row)
-                    table_data.sort(key=lambda x: REPORT_SUMMARY_ORDERING.get(x[0], 99))
-                    columns = columns[:1] + [
+    async def log_job_summary(self):
+        if job_summary := await self.get_job_summary():
+            job_id = job_summary.pop("jobExecutionId", None)
+            total_errors = job_summary.pop("totalErrors", 0)
+            columns = ["Summary"] + list(job_summary.keys())
+            rows = set()
+            for key in columns[1:]:
+                rows.update(job_summary[key].keys())
+
+            table_data = []
+            for row in rows:
+                metric_name = decamelize(row).split("_")[1]
+                table_row = [metric_name]
+                for col in columns[1:]:
+                    table_row.append(job_summary[col].get(row, "N/A"))
+                table_data.append(table_row)
+            table_data.sort(key=lambda x: REPORT_SUMMARY_ORDERING.get(x[0], 99))
+            columns = columns[:1] + [
                         " ".join(decamelize(x).split("_")[:-1]) for x in columns[1:]
                     ]
-                    logger.info(
+            logger.info(
                         f"Results for {'file' if len(self.current_file) == 1 else 'files'}: "
                         f"{', '.join([os.path.basename(x.name) for x in self.current_file])}"
                     )
-                    logger.info(
+            logger.info(
                         "\n"
                         + tabulate.tabulate(
                             table_data, headers=columns, tablefmt="fancy_grid"
                         ),
                     )
-                    if total_errors:
-                        logger.info(f"Total errors: {total_errors}. Job ID: {job_id}.")
-                else:
-                    logger.error(f"No job summary available for job {self.job_id}.")
-            self.last_current = 0
-            self.finished = False
+            if total_errors:
+                logger.info(f"Total errors: {total_errors}. Job ID: {job_id}.")
+        else:
+            logger.error(f"No job summary available for job #{self.job_hrid}({self.job_id}).")
 
     async def get_job_summary(self) -> dict:
         """
@@ -753,12 +829,15 @@ async def main() -> None:
         "--preprocessor",
         type=str,
         help=(
-            "The path to a Python module containing a preprocessing function "
-            "to apply to each MARC record before sending to FOLIO."
+            "Comma-separated python import paths to Python function(s) "
+            "to apply to each MARC record before sending to FOLIO. Function should take "
+            "a pymarc.Record object as input and return a pymarc.Record object."
         ),
         default=None,
     )
-    parser.add_argument(
+    # Add mutually exclusive group for consolidate and split-files options
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--consolidate",
         action="store_true",
         help=(
@@ -766,6 +845,18 @@ async def main() -> None:
             "Default is to create a new job for each MARC file."
         ),
     )
+    group.add_argument(
+        "--split-files",
+        action="store_true",
+        help="Split files into smaller parts before importing.",
+    )
+    parser.add_argument(
+        "--split-size",
+        type=int,
+        help="The number of records to include in each split file.",
+        default=1000,
+    )
+
     parser.add_argument(
         "--no-progress",
         action="store_true",
@@ -831,6 +922,8 @@ async def main() -> None:
             consolidate=bool(args.consolidate),
             no_progress=bool(args.no_progress),
             let_summary_fail=bool(args.let_summary_fail),
+            split_files=bool(args.split_files),
+            split_size=args.split_size,
         ).do_work()
     except Exception as e:
         logger.error("Error importing files: " + str(e))
