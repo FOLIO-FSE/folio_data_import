@@ -51,6 +51,7 @@ class UserImporter:  # noqa: R0902
         user_match_key: str = "externalSystemId",
         only_update_present_fields: bool = False,
         default_preferred_contact_type: str = "002",
+        protect_fields: list[str] = None,
     ) -> None:
         self.limit_simultaneous_requests = limit_simultaneous_requests
         self.batch_size = batch_size
@@ -77,6 +78,7 @@ class UserImporter:  # noqa: R0902
         self.match_key = user_match_key
         self.lock: asyncio.Lock = asyncio.Lock()
         self.logs: dict = {"created": 0, "updated": 0, "failed": 0}
+        self.protect_fields = set(protect_fields or [])
 
     @staticmethod
     def build_ref_data_id_map(
@@ -334,6 +336,13 @@ class UserImporter:  # noqa: R0902
             None
 
         """
+        #  protect top-level fields listed in self.protect_fields
+        saved_fields = {}
+        for fld in self.protect_fields:
+            if fld in existing_user:
+                saved_fields[fld] = existing_user[fld]
+                user_obj.pop(fld, None)
+
         await self.set_preferred_contact_type(user_obj, existing_user)
         preferred_contact_type = {"preferredContactTypeId": existing_user.get("personal", {}).pop("preferredContactTypeId")}
         if self.only_update_present_fields:
@@ -356,6 +365,11 @@ class UserImporter:  # noqa: R0902
                 existing_user["personal"] = existing_personal
         else:
             existing_user.update(user_obj)
+
+        # restore protected top-level fields
+        for fld, val in saved_fields.items():
+            existing_user[fld] = val
+
         if "personal" in existing_user:
             existing_user["personal"].update(preferred_contact_type)
         else:
@@ -953,7 +967,16 @@ async def main() -> None:
         choices=list(PREFERRED_CONTACT_TYPES_MAP.keys()) + list(PREFERRED_CONTACT_TYPES_MAP.values()),
         default="002",
     )
+    parser.add_argument(
+        "--protect-fields",
+        help=(
+            "Comma-separated list of top-level user fields to protect from overwrite "
+            "(e.g. type,expirationDate)"
+        ),
+        default="",
+    )
     args = parser.parse_args()
+    protect_fields = [f.strip() for f in args.protect_fields.split(",") if f.strip()]
 
     library_name = args.library_name
 
@@ -1005,6 +1028,7 @@ async def main() -> None:
                 args.user_match_key,
                 args.update_only_present_fields,
                 args.default_preferred_contact_type,
+                protect_fields=protect_fields,
             )
             await importer.do_import()
         except Exception as ee:
