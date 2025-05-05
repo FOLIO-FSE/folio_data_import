@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "folio_data_import"
-version = "0.2.8"
+version = "0.2.8.post1"
 description = "A python module to interact with the data importing capabilities of the open-source FOLIO ILS"
 authors = ["Brooks Travis <brooks.travis@gmail.com>"]
 license = "MIT"
@@ -14,7 +14,7 @@ folio-user-import = "folio_data_import.UserImport:sync_main"
 
 [tool.poetry.dependencies]
 python = "^3.9"
-folioclient = "0.70.1"
+folioclient = "^0.70.1"
 pymarc = "^5.2.2"
 pyhumps = "^3.8.0"
 inquirer = "^3.4.0"
