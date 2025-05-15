@@ -1,69 +1,71 @@
 import pymarc
 import logging
 
+from pymarc.record import Record
+
 logger = logging.getLogger("folio_data_import.MARCDataImport")
 
 
-def prepend_prefix_001(record: pymarc.Record, prefix: str) -> pymarc.Record:
+def prepend_prefix_001(record: Record, prefix: str) -> Record:
     """
     Prepend a prefix to the record's 001 field.
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
         prefix (str): The prefix to prepend to the 001 field.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     record["001"].data = f"({prefix})" + record["001"].data
     return record
 
 
-def prepend_ppn_prefix_001(record: pymarc.Record) -> pymarc.Record:
+def prepend_ppn_prefix_001(record: Record) -> Record:
     """
     Prepend the PPN prefix to the record's 001 field. Useful when
     importing records from the ABES SUDOC catalog
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     return prepend_prefix_001(record, "PPN")
 
 
-def prepend_abes_prefix_001(record: pymarc.Record) -> pymarc.Record:
+def prepend_abes_prefix_001(record: Record) -> Record:
     """
     Prepend the ABES prefix to the record's 001 field. Useful when
     importing records from the ABES SUDOC catalog
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     return prepend_prefix_001(record, "ABES")
 
 
-def strip_999_ff_fields(record: pymarc.Record) -> pymarc.Record:
+def strip_999_ff_fields(record: Record) -> Record:
     """
     Strip all 999 fields with ff indicators from the record.
     Useful when importing records exported from another FOLIO system
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     for field in record.get_fields("999"):
         if field.indicators == pymarc.Indicators(*["f", "f"]):
             record.remove_field(field)
     return record
 
-def clean_999_fields(record: pymarc.Record) -> pymarc.Record:
+def clean_999_fields(record: Record) -> Record:
     """
     The presence of 999 fields, with or without ff indicators, can cause
     issues with data import mapping in FOLIO. This function calls strip_999_ff_fields
@@ -71,10 +73,10 @@ def clean_999_fields(record: pymarc.Record) -> pymarc.Record:
     to 945 fields.
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     record = strip_999_ff_fields(record)
     for field in record.get_fields("999"):
@@ -87,7 +89,31 @@ def clean_999_fields(record: pymarc.Record) -> pymarc.Record:
         record.remove_field(field)
     return record
 
-def sudoc_supercede_prep(record: pymarc.Record) -> pymarc.Record:
+def clean_non_ff_999_fields(record: Record) -> Record:
+    """
+    When loading migrated MARC records from folio_migration_tools, the presence of other 999 fields
+    than those set by the migration process can cause the record to fail to load properly. This preprocessor
+    function moves all 999 fields with non-ff indicators to 945 fields with 99 indicators.
+    """
+    for field in record.get_fields("999"):
+        if field.indicators != pymarc.Indicators(*["f", "f"]):
+            logger.log(
+                26,
+                "DATA ISSUE\t%s\t%s\t%s",
+                record["001"].value(),
+                "Record contains a 999 field with non-ff indicators: Moving field to a 945 with indicators \"99\"",
+                field,
+            )
+            _945 = pymarc.Field(
+                tag="945",
+                indicators=pymarc.Indicators("9","9"),
+                subfields=field.subfields,
+            )
+            record.add_ordered_field(_945)
+            record.remove_field(field)
+    return record
+
+def sudoc_supercede_prep(record: Record) -> Record:
     """
     Preprocesses a record from the ABES SUDOC catalog to copy 035 fields
     with a $9 subfield value of 'sudoc' to 935 fields with a $a subfield
@@ -96,10 +122,10 @@ def sudoc_supercede_prep(record: pymarc.Record) -> pymarc.Record:
     in FOLIO. This also applyes the prepend_ppn_prefix_001 function to the record.
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     record = prepend_abes_prefix_001(record)
     for field in record.get_fields("035"):
@@ -113,7 +139,7 @@ def sudoc_supercede_prep(record: pymarc.Record) -> pymarc.Record:
     return record
 
 
-def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
+def clean_empty_fields(record: Record) -> Record:
     """
     Remove empty fields and subfields from the record. These can cause
     data import mapping issues in FOLIO. Removals are logged at custom
@@ -121,10 +147,10 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
     data issues report.
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     MAPPED_FIELDS = {
         "010": ["a", "z"],
@@ -290,16 +316,16 @@ def clean_empty_fields(record: pymarc.Record) -> pymarc.Record:
     return record
 
 
-def fix_leader(record: pymarc.Record) -> pymarc.Record:
+def fix_leader(record: Record) -> Record:
     """
     Fixes the leader of the record by setting the record status to 'c' (modified
     record) and the type of record to 'a' (language material).
 
     Args:
-        record (pymarc.Record): The MARC record to preprocess.
+        record (Record): The MARC record to preprocess.
 
     Returns:
-        pymarc.Record: The preprocessed MARC record.
+        Record: The preprocessed MARC record.
     """
     VALID_STATUSES = ["a", "c", "d", "n", "p"]
     VALID_TYPES = ["a", "c", "d", "e", "f", "g", "i", "j", "k", "m", "o", "p", "r", "t"]
@@ -309,7 +335,7 @@ def fix_leader(record: pymarc.Record) -> pymarc.Record:
             "DATA ISSUE\t%s\t%s\t%s",
             record["001"].value(),
             f"Invalid record status: {record.leader[5]}, setting to 'c'",
-            record,
+            record.leader,
         )
         record.leader = pymarc.Leader(record.leader[:5] + "c" + record.leader[6:])
     if record.leader[6] not in VALID_TYPES:
@@ -318,7 +344,7 @@ def fix_leader(record: pymarc.Record) -> pymarc.Record:
             "DATA ISSUE\t%s\t%s\t%s",
             record["001"].value(),
             f"Invalid record type: {record.leader[6]}, setting to 'a'",
-            record,
+            record.leader,
         )
         record.leader = pymarc.Leader(record.leader[:6] + "a" + record.leader[7:])
     return record
