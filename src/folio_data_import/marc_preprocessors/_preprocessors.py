@@ -463,9 +463,9 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
             "800", "810", "811", "830"
         ]
     for field in record.get_fields(*controlled_fields):
-        for subfield in field.get_subfields("9"):
+        for subfield in list(field.get_subfields("9")):
             field.add_subfield("0", subfield)
-            field.delete_subfield("9")
+            field.delete_subfield("9", subfield)
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
