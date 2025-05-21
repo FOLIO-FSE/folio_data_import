@@ -2,8 +2,8 @@ import argparse
 import asyncio
 import datetime
 import glob
-import importlib
 import io
+import json
 import logging
 import math
 import os
@@ -15,7 +15,7 @@ from functools import cached_property
 from getpass import getpass
 from pathlib import Path
 from time import sleep
-from typing import BinaryIO, Callable, List, Union
+from typing import Any, BinaryIO, Callable, Dict, List, Union
 
 import folioclient
 import httpx
@@ -26,6 +26,7 @@ from humps import decamelize
 from tqdm import tqdm
 
 from folio_data_import.custom_exceptions import FolioDataImportBatchError
+from folio_data_import.marc_preprocessors._preprocessors import MARCPreprocessor
 
 try:
     datetime_utc = datetime.UTC
@@ -92,7 +93,8 @@ class MARCImportJob:
         import_profile_name: str,
         batch_size=10,
         batch_delay=0,
-        marc_record_preprocessor=None,
+        marc_record_preprocessor: Union[List[Callable], str]=[],
+        preprocessor_args: Dict[str,Dict]={},
         no_progress=False,
         let_summary_fail=False,
         split_files=False,
@@ -110,7 +112,7 @@ class MARCImportJob:
         self.batch_size = batch_size
         self.batch_delay = batch_delay
         self.current_retry_timeout = None
-        self.marc_record_preprocessor = marc_record_preprocessor
+        self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(marc_record_preprocessor, **preprocessor_args)
 
     async def do_work(self) -> None:
         """
@@ -445,10 +447,7 @@ class MARCImportJob:
                     )
                     sleep(0.25)
                 if record:
-                    if self.marc_record_preprocessor:
-                        record = await self.apply_marc_record_preprocessing(
-                            record, self.marc_record_preprocessor
-                        )
+                    record = self.marc_record_preprocessor.do_work(record)
                     self.record_batch.append(record.as_marc())
                     counter += 1
                 else:
@@ -479,58 +478,6 @@ class MARCImportJob:
         file_path.rename(
                 file_path.parent.joinpath("import_complete", file_path.name)
             )
-
-    @staticmethod
-    async def apply_marc_record_preprocessing(
-        record: pymarc.Record, func_or_path: Union[Callable, str]
-    ) -> pymarc.Record:
-        """
-        Apply preprocessing to the MARC record before sending it to FOLIO.
-
-        Args:
-            record (pymarc.Record): The MARC record to preprocess.
-            func_or_path (Union[Callable, str]): The preprocessing function or its import path.
-
-        Returns:
-            pymarc.Record: The preprocessed MARC record.
-        """
-        if isinstance(func_or_path, str):
-            func_paths = func_or_path.split(",")
-            for func_path in func_paths:
-                record = await MARCImportJob._apply_single_marc_record_preprocessing_by_path(
-                    record, func_path
-                )
-        elif callable(func_or_path):
-            record = func_or_path(record)
-        else:
-            logger.warning(
-                f"Invalid preprocessing function: {func_or_path}. Skipping preprocessing."
-            )
-        return record
-
-    async def _apply_single_marc_record_preprocessing_by_path(
-        record: pymarc.Record, func_path: str
-    ) -> pymarc.Record:
-        """
-        Apply a single preprocessing function to the MARC record.
-
-        Args:
-            record (pymarc.Record): The MARC record to preprocess.
-            func_path (str): The path to the preprocessing function.
-
-        Returns:
-            pymarc.Record: The preprocessed MARC record.
-        """
-        try:
-            module_path, func_name = func_path.rsplit(".", 1)
-            module = importlib.import_module(module_path)
-            func = getattr(module, func_name)
-            record = func(record)
-        except Exception as e:
-            logger.warning(
-                f"Error applying preprocessing function {func_path}: {e}. Skipping."
-            )
-        return record
 
     async def create_batch_payload(self, counter, total_records, is_last) -> dict:
         """
@@ -893,6 +840,16 @@ async def main() -> None:
         action="store_true",
         help="Do not retry fetching the final job summary if it fails",
     )
+    parser.add_argument(
+        "--preprocessor-config",
+        type=str,
+        help=(
+            "JSON file containing configuration for preprocessor functions. "
+            "This is passed to MARCPreprocessor class as a dict of dicts."
+        ),
+        default=None,
+    )
+
     args = parser.parse_args()
     if not args.password:
         args.password = getpass("Enter FOLIO password: ")
@@ -916,6 +873,12 @@ async def main() -> None:
         sys.exit(1)
     else:
         logger.info(marc_files)
+
+    if args.preprocessor_config:
+        with open(args.preprocessor_config, "r") as f:
+            preprocessor_args = json.load(f)
+    else:
+        preprocessor_args = {}
 
     if not args.import_profile_name:
         import_profiles = folio_client.folio_get(
@@ -945,6 +908,7 @@ async def main() -> None:
             batch_size=args.batch_size,
             batch_delay=args.batch_delay,
             marc_record_preprocessor=args.preprocessor,
+            preprocessor_args=preprocessor_args,
             no_progress=bool(args.no_progress),
             let_summary_fail=bool(args.let_summary_fail),
             split_files=bool(args.split_files),

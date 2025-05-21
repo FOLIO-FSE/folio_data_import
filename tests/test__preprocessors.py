@@ -1,21 +1,20 @@
-from multiprocessing import Value
-from unittest.mock import Mock
-from folioclient import FolioClient
 import pytest
 import pymarc
 from folio_data_import.marc_preprocessors._preprocessors import *
 
 
 def test_prepend_ppn_prefix_001():
+    processor = MARCPreprocessor("prepend_ppn_prefix_001")
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='001', data='123456'))
-    record = prepend_ppn_prefix_001(record)
+    record = processor.do_work(record)
     assert record['001'].data == '(PPN)123456'
 
 def test_prepend_abes_prefix_001():
+    processor = MARCPreprocessor("prepend_abes_prefix_001")
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='001', data='123456'))
-    record = prepend_abes_prefix_001(record)
+    record = processor.do_work(record)
     assert record['001'].data == '(ABES)123456'
 
 def test_prepend_prefix_001():
@@ -25,13 +24,15 @@ def test_prepend_prefix_001():
     assert record['001'].data == '(TEST)123456'
 
 def test_strip_999_ff_fields():
+    processor = MARCPreprocessor("strip_999_ff_fields")
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='999', indicators=['f', 'f']))
     record.add_field(pymarc.Field(tag='999', indicators=[' ', ' ']))
-    record = strip_999_ff_fields(record)
+    record = processor.do_work(record)
     assert len(record.get_fields('999')) == 1
 
 def test_sudoc_supercede_prep():
+    processor = MARCPreprocessor("sudoc_supercede_prep")
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='001', data='123456'))
     record.add_field(pymarc.Field(tag='035', indicators=['', ''], subfields=[
@@ -42,13 +43,14 @@ def test_sudoc_supercede_prep():
         pymarc.field.Subfield('a', '345678'),
         pymarc.field.Subfield('9', 'sudoc')
     ]))
-    record = sudoc_supercede_prep(record)
+    record = processor.do_work(record)
     assert record.get_fields('935')[0]["a"] == '(ABES)234567'
     assert record.get_fields('935')[1]["a"] == '(ABES)345678'
     assert record['001'].data == '(ABES)123456'
 
 
 def test_clean_empty_fields():
+    processor = MARCPreprocessor("clean_empty_fields")
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='001', data='123456'))
     bad_010 = pymarc.Field(tag='010', indicators=[' ', ' '], subfields=[
@@ -95,7 +97,7 @@ def test_clean_empty_fields():
         pymarc.field.Subfield('c', 'by Test')
     ])
     record.add_field(good_245)
-    record = clean_empty_fields(record)
+    record = processor.do_work(record)
     assert len(record.get_fields('010')) == 0
     assert len(record.get_fields('035')) == 1
     assert len(record.get_fields('650')) == 1
@@ -107,6 +109,7 @@ def test_clean_empty_fields():
     assert record["020"].get("y", "") == "0123-4567"
 
 def test_fix_leader():
+    preprocessor = MARCPreprocessor("fix_leader")
     record = pymarc.Record()
     record.leader = pymarc.Leader('01234mbm a2200349 a 4500')
     fields=[
@@ -122,12 +125,13 @@ def test_fix_leader():
     ]
     for field in fields:
         record.add_field(field)
-    record = fix_leader(record)
+    record = preprocessor.do_work(record)
     assert record.leader[5] == 'c'
     assert record.leader[6] == 'a'
 
 
 def test_clean_999_fields():
+    preprocessor = MARCPreprocessor("clean_999_fields")
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='001', data='123456'))
     record.add_field(pymarc.Field(tag='999', indicators=['f', 'f'], subfields=[
@@ -136,7 +140,28 @@ def test_clean_999_fields():
     record.add_field(pymarc.Field(tag='999', indicators=[' ', ' '], subfields=[
         pymarc.field.Subfield('i', 'Test')
     ]))
-    record = clean_999_fields(record)
+    record = preprocessor.do_work(record)
     assert len(record.get_fields('999')) == 0
     assert len(record.get_fields('945')) == 1
     assert record['945'].indicators == pymarc.Indicators(*[' ', ' '])
+
+
+def test_clean_non_ff_999_fields():
+    preprocessor = MARCPreprocessor("clean_non_ff_999_fields")
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='123456'))
+    record.add_field(pymarc.Field(tag='999', indicators=['f', 'f'], subfields=[
+        pymarc.field.Subfield('i', 'Test')
+    ]))
+    record.add_field(pymarc.Field(tag='999', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('i', 'Test')
+    ]))
+    record = preprocessor.do_work(record)
+    assert len(record.get_fields('999')) == 1
+    assert len(record.get_fields('945')) == 1
+
+
+def test__get_preprocessor_functions():
+    preprocessor_class = MARCPreprocessor("clean_999_fields,clean_empty_fields")
+    assert preprocessor_class.preprocessors[0][0].__name__ == "clean_999_fields"
+    assert preprocessor_class.preprocessors[1][0].__name__ == "clean_empty_fields"
