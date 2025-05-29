@@ -47,6 +47,9 @@ class MARCPreprocessor:
         """
         Get the preprocessor functions based on the provided names.
 
+        Args:
+            func_list (Union[str, List[Callable]]): A string of comma-separated function names or a list of callable preprocessor functions.
+
         Returns:
             List[callable]: A list of preprocessor functions.
         """

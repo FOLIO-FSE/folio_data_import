@@ -25,7 +25,7 @@ import tabulate
 from humps import decamelize
 from tqdm import tqdm
 
-from folio_data_import.custom_exceptions import FolioDataImportBatchError
+from folio_data_import.custom_exceptions import FolioDataImportBatchError, FolioDataImportJobError
 from folio_data_import.marc_preprocessors._preprocessors import MARCPreprocessor
 
 try:
@@ -88,6 +88,8 @@ class MARCImportJob:
     job_hrid: int = 0
     current_file: Union[List[Path], List[io.BytesIO]] = []
     _max_summary_retries: int = 2
+    _max_job_retries: int = 2
+    _job_retries: int = 0
     _summary_retries: int = 0
 
     def __init__(
@@ -229,10 +231,10 @@ class MARCImportJob:
                 )
                 self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
+            error_text = e.response.text if hasattr(e, "response") else str(e)
             if self.current_retry_timeout <= RETRY_TIMEOUT_MAX and (
                 not hasattr(e, "response") or e.response.status_code in [502, 504, 401]
             ):
-                error_text = e.response.text if hasattr(e, "response") else str(e)
                 logger.warning(
                     f"SERVER ERROR fetching job status: {error_text}. Retrying."
                 )
@@ -244,14 +246,7 @@ class MARCImportJob:
                 logger.critical(
                     f"SERVER ERROR fetching job status: {error_text}. Max retries exceeded."
                 )
-                if self.pbar_sent.n == self.pbar_sent.total:
-                    self.finished = True
-                    return None
-                else:
-                    logger.critical(
-                        f"SERVER ERROR Unable to confirm all records sent. Job ID: {self.job_id}. Raising exception."
-                    )
-                    raise e
+                raise FolioDataImportJobError(self.job_id, error_text, e)
             else:
                 raise e
         except Exception as e:
@@ -633,13 +628,26 @@ class MARCImportJob:
                     await self.process_records(files, total_records)
                     while not self.finished:
                         await self.get_job_status()
-                    sleep(1)
+                    sleep(5)
                 except FolioDataImportBatchError as e:
                     logger.error(
                         f"Unhandled error posting batch {e.batch_id}: {e.message}"
                     )
                     await self.cancel_job()
                     raise e
+                except FolioDataImportJobError as e:
+                    await self.cancel_job()
+                    if self._job_retries < self._max_job_retries:
+                        self._job_retries += 1
+                        logger.error(
+                            f"Unhandled error processing job {e.job_id}: {e.message}, cancelling and retrying."
+                        )
+                        await self.import_marc_file()
+                    else:
+                        logger.critical(
+                            f"Unhandled error processing job {e.job_id}: {e.message}, cancelling and exiting (maximum retries reached)."
+                        )
+                        raise e
             if self.finished:
                 await self.log_job_summary()
             self.last_current = 0
@@ -849,7 +857,7 @@ async def main() -> None:
             "to apply to each MARC record before sending to FOLIO. Function should take "
             "a pymarc.Record object as input and return a pymarc.Record object."
         ),
-        default=None,
+        default="",
     )
 
     parser.add_argument(
