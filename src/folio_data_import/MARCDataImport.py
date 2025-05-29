@@ -117,7 +117,7 @@ class MARCImportJob:
         self.import_profile_name = import_profile_name
         self.batch_size = batch_size
         self.batch_delay = batch_delay
-        self.current_retry_timeout = None
+        self.current_retry_timeout = 0
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
             marc_record_preprocessor, **preprocessor_args
         )
