@@ -628,7 +628,7 @@ class MARCImportJob:
                     await self.process_records(files, total_records)
                     while not self.finished:
                         await self.get_job_status()
-                    sleep(5)
+                    await asyncio.sleep(5)
                 except FolioDataImportBatchError as e:
                     logger.error(
                         f"Unhandled error posting batch {e.batch_id}: {e.message}"
