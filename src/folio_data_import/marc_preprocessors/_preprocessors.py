@@ -361,7 +361,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
 
     for field in record.get_fields(*MAPPED_FIELDS.keys()):
         len_subs = len(field.subfields)
-        subfield_value = bool(field.subfields[0].value) if len_subs else False
+        subfield_value = bool(field.subfields[0].value.replace(".", "").replace(",", "").replace("-", "").strip()) if len_subs else False
         if int(field.tag) > 9 and len_subs == 0:
             logger.log(
                 26,
@@ -463,12 +463,12 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
             "100", "110", "111", "130",
             "600", "610", "611", "630", "650", "651", "655",
             "700", "710", "711", "730",
-            "800", "810", "811", "830"
+            "800", "810", "811", "830", "880"
         ]
     for field in record.get_fields(*controlled_fields):
         for subfield in list(field.get_subfields("9")):
             field.add_subfield("0", subfield)
-            field.delete_subfield("9", subfield)
+            field.delete_subfield("9")
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
