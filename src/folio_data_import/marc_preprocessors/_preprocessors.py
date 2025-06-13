@@ -3,6 +3,7 @@ import sys
 from typing import Callable, Dict, List, Tuple, Union
 import pymarc
 import logging
+import re
 
 from pymarc.record import Record
 
@@ -361,7 +362,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
 
     for field in record.get_fields(*MAPPED_FIELDS.keys()):
         len_subs = len(field.subfields)
-        subfield_value = bool(field.subfields[0].value.replace(".", "").replace(",", "").replace("-", "").strip()) if len_subs else False
+        subfield_value = bool(re.sub(r"[.,-]", "", field.subfields[0].value).strip()) if len_subs else False
         if int(field.tag) > 9 and len_subs == 0:
             logger.log(
                 26,
