@@ -80,7 +80,7 @@ Unlike mod-user-import, this importer does not require `externalSystemId` as the
 
 Another point of departure from the behavior of `mod-user-import` is the handling of `preferredContactTypeId`. This importer will accept either the `"001", "002", "003"...` values stored by FOLIO, or the human-friendly strings used by `mod-user-import` (`"mail", "email", "text", "phone", "mobile"`). It will also __*set a customizable default for all users that do not otherwise have a valid value specified*__ (using `--default_preferred_contact_type`), unless a (valid) value is already present in the user record being updated.
 
-#### Field Protection (*experimental*)
+#### Per-record Field Protection (*experimental*)
 
 This script offers a rudimentary field protection implementation using custom fields. To enable this functionality, create a text custom field that has the field name `protectedFields`. In this field, you can specify a comma-separated list of User schema field names, using dot-notation for nested fields. This protection should support all standard fields except addresses within `personal.addresses`. If you include `personal.addresses` in a user record, any existing addresses will be replaced by the new values.
 
@@ -94,6 +94,14 @@ This script offers a rudimentary field protection implementation using custom fi
 
 Would result in `preferredFirstName`, `barcode`, and `telephone` remaining unchanged, regardless of the contents of the incoming records.
 
+#### Job-level field protection
+
+To protect fields for all records in a particular import job, you can pass a list of field paths with the `--fields-to-protect` flag. These protections will be applied in combination with any record-level protections specified.
+
+##### Example
+```Shell
+folio-user-import ... --fields-to-protect "personal.preferredFirstName,customFields.exampleCustomField"
+```
 
 #### How to use:
 1. Generate a JSON lines (one JSON object per line) file of FOLIO user objects in the style of [mod-user-import](https://github.com/folio-org/mod-user-import)
