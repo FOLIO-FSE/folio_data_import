@@ -10,6 +10,7 @@ def test_prepend_ppn_prefix_001():
     record = processor.do_work(record)
     assert record['001'].data == '(PPN)123456'
 
+
 def test_prepend_abes_prefix_001():
     processor = MARCPreprocessor("prepend_abes_prefix_001")
     record = pymarc.Record()
@@ -17,11 +18,13 @@ def test_prepend_abes_prefix_001():
     record = processor.do_work(record)
     assert record['001'].data == '(ABES)123456'
 
+
 def test_prepend_prefix_001():
     record = pymarc.Record()
     record.add_field(pymarc.Field(tag='001', data='123456'))
     record = prepend_prefix_001(record, 'TEST')
     assert record['001'].data == '(TEST)123456'
+
 
 def test_strip_999_ff_fields():
     processor = MARCPreprocessor("strip_999_ff_fields")
@@ -30,6 +33,7 @@ def test_strip_999_ff_fields():
     record.add_field(pymarc.Field(tag='999', indicators=[' ', ' ']))
     record = processor.do_work(record)
     assert len(record.get_fields('999')) == 1
+
 
 def test_sudoc_supercede_prep():
     processor = MARCPreprocessor("sudoc_supercede_prep")
@@ -108,8 +112,8 @@ def test_clean_empty_fields():
         record['020']['a']
     assert record["020"].get("y", "") == "0123-4567"
 
-def test_fix_leader():
-    preprocessor = MARCPreprocessor("fix_leader")
+def test_fix_bib_leader():
+    preprocessor = MARCPreprocessor("fix_bib_leader")
     record = pymarc.Record()
     record.leader = pymarc.Leader('01234mbm a2200349 a 4500')
     fields=[

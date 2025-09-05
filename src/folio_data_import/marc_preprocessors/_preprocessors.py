@@ -9,12 +9,13 @@ from pymarc.record import Record
 
 logger = logging.getLogger("folio_data_import.MARCDataImport")
 
+
 class MARCPreprocessor:
     """
     A class to preprocess MARC records for data import into FOLIO.
     """
 
-    def __init__(self, preprocessors: Union[str,List[Callable]], **kwargs):
+    def __init__(self, preprocessors: Union[str, List[Callable]], **kwargs):
         """
         Initialize the MARCPreprocessor with a list of preprocessors.
 
@@ -416,7 +417,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
     return record
 
 
-def fix_leader(record: Record, **kwargs) -> Record:
+def fix_bib_leader(record: Record, **kwargs) -> Record:
     """
     Fixes the leader of the record by setting the record status to 'c' (modified
     record) and the type of record to 'a' (language material).
@@ -449,6 +450,7 @@ def fix_leader(record: Record, **kwargs) -> Record:
         record.leader = pymarc.Leader(record.leader[:6] + "a" + record.leader[7:])
     return record
 
+
 def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwargs) -> Record:
     """
     Move subfield 9 from authority fields to subfield 0. This is useful when
@@ -461,13 +463,14 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
         Record: The preprocessed MARC record.
     """
     controlled_fields = [
-            "100", "110", "111", "130",
-            "600", "610", "611", "630", "650", "651", "655",
-            "700", "710", "711", "730",
-            "800", "810", "811", "830", "880"
-        ]
+        "100", "110", "111", "130",
+        "600", "610", "611", "630", "650", "651", "655",
+        "700", "710", "711", "730",
+        "800", "810", "811", "830", "880"
+    ]
     for field in record.get_fields(*controlled_fields):
-        for subfield in list(field.get_subfields("9")):
+        _subfields = field.get_subfields("9")
+        for subfield in _subfields:
             field.add_subfield("0", subfield)
             field.delete_subfield("9")
             logger.log(
@@ -478,6 +481,7 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
                 field,
             )
     return record
+
 
 def ordinal(n):
     s = ("th", "st", "nd", "rd") + ("th",) * 10
