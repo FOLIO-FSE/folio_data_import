@@ -80,11 +80,12 @@ class MARCImportJob:
     pbar_imported: tqdm
     http_client: httpx.Client
     current_file: List[Path]
-    record_batch: List[dict] = []
+    record_batch: List[dict]
     last_current: int = 0
     total_records_sent: int = 0
     finished: bool = False
     job_id: str = ""
+    job_ids: List[str]
     job_hrid: int = 0
     current_file: Union[List[Path], List[io.BytesIO]] = []
     _max_summary_retries: int = 2
@@ -99,13 +100,14 @@ class MARCImportJob:
         import_profile_name: str,
         batch_size=10,
         batch_delay=0,
-        marc_record_preprocessor: Union[List[Callable], str] = [],
-        preprocessor_args: Dict[str, Dict] = {},
+        marc_record_preprocessor: Union[List[Callable], str] = None,
+        preprocessor_args: Dict[str, Dict] = None,
         no_progress=False,
         let_summary_fail=False,
         split_files=False,
         split_size=1000,
         split_offset=0,
+        job_ids_file_path: str = ""
     ) -> None:
         self.split_files = split_files
         self.split_size = split_size
@@ -121,6 +123,7 @@ class MARCImportJob:
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
             marc_record_preprocessor, **preprocessor_args
         )
+        self.job_ids_file_path = job_ids_file_path or self.import_files[0].parent.joinpath("marc_import_job_ids.txt")
 
     async def do_work(self) -> None:
         """
@@ -132,6 +135,8 @@ class MARCImportJob:
         Returns:
             None
         """
+        self.record_batch = []
+        self.job_ids = []
         with (
             httpx.Client() as http_client,
             open(
@@ -158,7 +163,6 @@ class MARCImportJob:
                 for file in self.import_files:
                     self.current_file = [file]
                     await self.import_marc_file()
-            await self.wrap_up()
 
     async def process_split_files(self):
         """
@@ -201,6 +205,10 @@ class MARCImportJob:
             if not failed_batches.read(1):
                 os.remove(failed_batches.name)
                 logger.info("No failed batches. Removing failed batches file.")
+        with open(self.job_ids_file_path, "a+") as job_ids_file:
+            logger.info(f"Writing job IDs to {self.job_ids_file_path}")
+            for job_id in self.job_ids:
+                job_ids_file.write(f"{job_id}\n")
         logger.info("Import complete.")
         logger.info(f"Total records imported: {self.total_records_sent}")
 
@@ -328,6 +336,7 @@ class MARCImportJob:
                 )
                 raise e
         self.job_id = create_job.json()["parentJobExecutionId"]
+        self.job_ids.append(self.job_id)
         logger.info(f"Created job: {self.job_id}")
 
     @cached_property
@@ -357,6 +366,9 @@ class MARCImportJob:
         Returns:
             The response from the HTTP request to set the job profile.
         """
+        logger.info(
+            f"Setting job profile: {self.import_profile['name']} ({self.import_profile['id']}) for job {self.job_id}"
+        )
         set_job_profile = self.http_client.put(
             self.folio_client.gateway_url
             + "/change-manager/jobExecutions/"
@@ -897,6 +909,12 @@ async def main() -> None:
         ),
         default=None,
     )
+    parser.add_argument(
+        "--job-ids-file-path",
+        type=str,
+        help="Path to the file where job IDs will be saved",
+        default="marc_data_import_job_ids.txt",
+    )
 
     args = parser.parse_args()
     if not args.password:
@@ -929,27 +947,34 @@ async def main() -> None:
         preprocessor_args = {}
 
     if not args.import_profile_name:
-        import_profiles = folio_client.folio_get(
-            "/data-import-profiles/jobProfiles",
-            "jobProfiles",
-            query_params={"limit": "1000"},
-        )
-        import_profile_names = [
-            profile["name"]
-            for profile in import_profiles
-            if "marc" in profile["dataType"].lower()
-        ]
-        questions = [
-            inquirer.List(
-                "import_profile_name",
-                message="Select an import profile",
-                choices=import_profile_names,
+        try:
+            import_profiles = folio_client.folio_get(
+                "/data-import-profiles/jobProfiles",
+                "jobProfiles",
+                query_params={"limit": "1000"},
             )
-        ]
-        answers = inquirer.prompt(questions)
-        args.import_profile_name = answers["import_profile_name"]
+            import_profile_names = [
+                profile["name"]
+                for profile in import_profiles
+                if "marc" in profile["dataType"].lower()
+            ]
+            questions = [
+                inquirer.List(
+                    "import_profile_name",
+                    message="Select an import profile",
+                    choices=import_profile_names,
+                )
+            ]
+            answers = inquirer.prompt(questions)
+            args.import_profile_name = answers["import_profile_name"]
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"HTTP Error fetching import profiles: {e}\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
+            )
+            sys.exit(1)
+    job = None
     try:
-        await MARCImportJob(
+        job = MARCImportJob(
             folio_client,
             marc_files,
             args.import_profile_name,
@@ -962,10 +987,20 @@ async def main() -> None:
             split_files=bool(args.split_files),
             split_size=args.split_size,
             split_offset=args.split_offset,
-        ).do_work()
+            job_ids_file_path=args.job_ids_file_path,
+        )
+        await job.do_work()
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"HTTP Error importing files: {e}\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
+        )
+        sys.exit(1)
     except Exception as e:
         logger.error("Error importing files: " + str(e))
         raise
+    finally:
+        if job:
+            await job.wrap_up()
 
 
 class ExcludeLevelFilter(logging.Filter):

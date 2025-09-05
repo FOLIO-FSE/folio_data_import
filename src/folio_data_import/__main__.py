@@ -43,14 +43,6 @@ async def main():
         default=0.0,
     )
     parser.add_argument(
-        "--consolidate",
-        action="store_true",
-        help=(
-            "Consolidate records into a single job. "
-            "Default is to create a new job for each MARC file."
-        ),
-    )
-    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable progress bars (eg. for running in a CI environment)",
@@ -92,7 +84,6 @@ async def main():
                 args.import_profile_name,
                 batch_size=args.batch_size,
                 batch_delay=args.batch_delay,
-                consolidate=bool(args.consolidate),
                 no_progress=bool(args.no_progress),
             ).do_work()
         except Exception as e:
