@@ -819,7 +819,9 @@ def set_up_cli_logging():
     # Stop httpx from logging info messages to the console
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+app = typer.Typer()
 
+@app.command()
 def main(
     gateway_url: Annotated[
         str, typer.Option(
@@ -951,13 +953,17 @@ def main(
                     choices=import_profile_names,
                 )
             ]
-            answers = inquirer.prompt(questions)
+            answers = inquirer.prompt(questions, raise_keyboard_interrupt=True)
             import_profile_name = answers["import_profile_name"]
         except httpx.HTTPStatusError as e:
             logger.error(
                 f"HTTP Error fetching import profiles: {e}\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
             )
             sys.exit(1)
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received. Exiting.")
+            sys.exit(0)
+
     job = None
     try:
         job = MARCImportJob(
@@ -975,7 +981,14 @@ def main(
             split_offset=split_offset,
             job_ids_file_path=job_ids_file_path,
         )
-        asyncio.run(job.do_work())
+        asyncio.run(run_job(job))
+    except Exception as e:
+        logger.error("Could not initialize MARCImportJob: " + str(e))
+        typer.Exit(1)
+
+async def run_job(job):
+    try:
+        await job.do_work()
     except httpx.HTTPStatusError as e:
         logger.error(
             f"HTTP Error importing files: {e}\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
@@ -986,7 +999,7 @@ def main(
         raise
     finally:
         if job:
-            asyncio.run(job.wrap_up())
+            await job.wrap_up()
 
 
 class ExcludeLevelFilter(logging.Filter):
@@ -1011,4 +1024,4 @@ def _main():
     typer.run(main)
 
 if __name__ == "__main__":
-    typer.run(main)
+    app()

@@ -915,7 +915,9 @@ class UserImporter:  # noqa: R0902
                 print(message)
                 await self.logfile.write(message + "\n")
 
+app = typer.Typer()
 
+@app.command()
 def main(
     gateway_url: Annotated[
         str, typer.Option(...,
@@ -1052,4 +1054,4 @@ def _main():
 
 # Run the main function
 if __name__ == "__main__":
-    typer.run(main)
+    app()
