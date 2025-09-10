@@ -1,4 +1,6 @@
-import argparse
+from enum import Enum
+from typing_extensions import Annotated
+import typer
 import asyncio
 import datetime
 import getpass
@@ -31,12 +33,29 @@ PREFERRED_CONTACT_TYPES_MAP = {
     "005": "mobile",
 }
 
+class PreferredContactType(Enum):
+    MAIL = "001"
+    EMAIL = "002"
+    TEXT = "003"
+    PHONE = "004"
+    MOBILE = "005"
+
+
+class UserMatchKeys(Enum):
+    USERNAME = "username"
+    EMAIL = "email"
+    EXTERNAL_SYSTEM_ID = "externalSystemId"
+
+
 class UserImporter:  # noqa: R0902
     """
     Class to import mod-user-import compatible user objects
     (eg. from folio_migration_tools UserTransformer task)
     from a JSON-lines file into FOLIO
     """
+    logfile: AsyncTextIOWrapper
+    errorfile: AsyncTextIOWrapper
+    http_client: httpx.AsyncClient
 
     def __init__(
         self,
@@ -44,9 +63,6 @@ class UserImporter:  # noqa: R0902
         library_name: str,
         batch_size: int,
         limit_simultaneous_requests: asyncio.Semaphore,
-        logfile: AsyncTextIOWrapper,
-        errorfile: AsyncTextIOWrapper,
-        http_client: httpx.AsyncClient,
         user_file_path: Path = None,
         user_match_key: str = "externalSystemId",
         only_update_present_fields: bool = False,
@@ -70,9 +86,6 @@ class UserImporter:  # noqa: R0902
         self.service_point_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/service-points", "servicepoints", "code"
         )
-        self.logfile: AsyncTextIOWrapper = logfile
-        self.errorfile: AsyncTextIOWrapper = errorfile
-        self.http_client: httpx.AsyncClient = http_client
         self.only_update_present_fields: bool = only_update_present_fields
         self.default_preferred_contact_type: str = default_preferred_contact_type
         self.match_key = user_match_key
@@ -114,17 +127,38 @@ class UserImporter:  # noqa: R0902
         except ValueError:
             return False
 
+    async def setup(self, log_file_path: Path, error_file_path: Path) -> None:
+        """
+        Sets up the importer by initializing necessary resources.
+
+        Args:
+            log_file_path (Path): The path to the log file.
+            error_file_path (Path): The path to the error file.
+        """
+        self.logfile = await aiofiles.open(log_file_path, "w", encoding="utf-8")
+        self.errorfile = await aiofiles.open(error_file_path, "w", encoding="utf-8")
+
+    async def close(self) -> None:
+        """
+        Closes the importer by releasing any resources.
+
+        """
+        await self.logfile.close()
+        await self.errorfile.close()
+
     async def do_import(self) -> None:
         """
         Main method to import users.
 
         This method triggers the process of importing users by calling the `process_file` method.
         """
-        if self.user_file_path:
-            with open(self.user_file_path, "r", encoding="utf-8") as openfile:
-                await self.process_file(openfile)
-        else:
-            raise FileNotFoundError("No user objects file provided")
+        async with httpx.AsyncClient() as client:
+            self.http_client = client
+            if self.user_file_path:
+                with open(self.user_file_path, "r", encoding="utf-8") as openfile:
+                    await self.process_file(openfile)
+            else:
+                raise FileNotFoundError("No user objects file provided")
 
     async def get_existing_user(self, user_obj) -> dict:
         """
@@ -882,122 +916,100 @@ class UserImporter:  # noqa: R0902
                 await self.logfile.write(message + "\n")
 
 
-async def main() -> None:
+def main(
+    gateway_url: Annotated[
+        str, typer.Option(...,
+            prompt="Please enter the FOLIO API Gateway URL", 
+            help="The FOLIO API Gateway URL",
+            envvar="FOLIO_GATEWAY_URL",
+        )
+    ],
+    tenant_id: Annotated[
+        str, typer.Option(...,
+            prompt="Please enter the FOLIO tenant id", help="The tenant id", envvar="FOLIO_TENANT_ID"
+        )
+    ],
+    username: Annotated[
+        str, typer.Option(...,
+            prompt="Please enter your FOLIO username", help="The FOLIO username", envvar="FOLIO_USERNAME"
+        )
+    ],
+    password: Annotated[
+        str, typer.Option(...,
+            prompt="Please enter your FOLIO Password", hide_input=True, help="The FOLIO password", envvar="FOLIO_PASSWORD"
+        )
+    ],
+    library_name: Annotated[
+        str, typer.Option(...,
+            prompt="Please enter the library name", help="The name of the library", envvar="FOLIO_LIBRARY_NAME"
+        )
+    ],
+    user_file_path: Annotated[
+        Path, typer.Option(..., help="The path to the user file")
+    ],
+    member_tenant_id: Annotated[
+        str, typer.Option(
+            help="The FOLIO ECS member tenant id (if applicable)",
+            envvar="FOLIO_MEMBER_TENANT_ID"
+        )
+    ] = "",
+    fields_to_protect: Annotated[
+        str, typer.Option(
+            help="Comma-separated list of top-level or nested (dot-notation) fields to protect"
+        )
+    ] = "",
+    update_only_present_fields: bool = typer.Option(
+        False,
+        "--update-only-present-fields",
+        help="Only update fields that are present in the new user object"
+    ),
+    limit_async_requests: Annotated[
+        int, typer.Option(
+            help="Limit how many http requests can be made at once", envvar="FOLIO_LIMIT_ASYNC_REQUESTS"
+        )
+    ] = 10,
+    batch_size: Annotated[
+        int, typer.Option(
+            help="How many user records to process before logging statistics", envvar="FOLIO_USER_IMPORT_BATCH_SIZE"
+        )
+    ] = 250,
+    report_file_base_path: Annotated[
+        Path, typer.Option(help="The base path for the log and error files")
+    ] = Path.cwd(),
+    user_match_key: UserMatchKeys = typer.Option(UserMatchKeys.EXTERNAL_SYSTEM_ID.value, help="The key to use to match users"),
+    default_preferred_contact_type: PreferredContactType = typer.Option(
+        PreferredContactType.EMAIL.value,
+        case_sensitive=False,
+        help="The default preferred contact type to use if the provided value is not valid or not present"
+    ),
+) -> None:
     """
-    Entry point of the user import script.
-
-    Parses command line arguments, initializes necessary objects, and starts the import process.
-
-    Args:
-        --tenant_id (str): The tenant id.
-        --library_name (str): The name of the library.
-        --username (str): The FOLIO username.
-        --okapi_url (str): The Okapi URL.
-        --user_file_path (str): The path to the user file.
-        --limit_async_requests (int): Limit how many http requests can be made at once. Default 10.
-        --batch_size (int): How many records to process before logging statistics. Default 250.
-        --folio_password (str): The FOLIO password.
-        --user_match_key (str): The key to use to match users. Default "externalSystemId".
-        --report_file_base_path (str): The base path for the log and error files. Default "./".
-        --update_only_present_fields (bool): Only update fields that are present in the new user object.
-        --default_preferred_contact_type (str): The default preferred contact type to use if the provided \
-            value is not valid or not present. Default "002".
-        --fields_to_protect (str): Comma-separated list of top-level or nested (dot-notation) fields to protect.
-
-    Raises:
-        Exception: If an unknown error occurs during the import process.
-
-    Returns:
-        None
+    Command-line interface to batch import users into FOLIO
     """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tenant_id", help="The tenant id")
-    parser.add_argument(
-        "--member_tenant_id",
-        help="The FOLIO ECS member tenant id (if applicable)",
-        default="",
-    )
-    parser.add_argument("--library_name", help="The name of the library")
-    parser.add_argument("--username", help="The FOLIO username")
-    parser.add_argument("--okapi_url", help="The Okapi URL")
-    parser.add_argument("--user_file_path", help="The path to the user file")
-    parser.add_argument(
-        "--limit_async_requests",
-        help="Limit how many http requests can be made at once",
-        type=int,
-        default=10,
-    )
-    parser.add_argument(
-        "--batch_size",
-        help="How many user records to process before logging statistics",
-        type=int,
-        default=250,
-    )
-    parser.add_argument("--folio_password", help="The FOLIO password")
-    parser.add_argument(
-        "--user_match_key",
-        help="The key to use to match users",
-        choices=["externalSystemId", "barcode", "username"],
-        default="externalSystemId",
-    )
-    parser.add_argument(
-        "--report_file_base_path",
-        help="The base path for the log and error files",
-        default="./",
-    )
-    parser.add_argument(
-        "--update_only_present_fields",
-        help="Only update fields that are present in the user object",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--default_preferred_contact_type",
-        help=(
-            "The default preferred contact type to use if the provided value is not present or not valid. "
-            "Note: '002' is the default, and will be used if the provided value is not valid or not present, "
-            "unless the existing user object being updated has a valid preferred contact type set."
-        ),
-        choices=list(PREFERRED_CONTACT_TYPES_MAP.keys()) + list(PREFERRED_CONTACT_TYPES_MAP.values()),
-        default="002",
-    )
-    parser.add_argument(
-        "--fields-to-protect",  # new flag name
-        dest="fields_to_protect",  # sets args.fields_to_protect
-        help=(
-            "Comma-separated list of top-level user fields to protect "
-            "(e.g. type,expirationDate)"
-        ),
-        default="",
-    )
-    args = parser.parse_args()
     protect_fields = [
-        f.strip() for f in args.fields_to_protect.split(",")
+        f.strip() for f in fields_to_protect.split(",")
         if f.strip()
     ]
 
-    library_name = args.library_name
+    library_name = library_name
 
     # Semaphore to limit the number of async HTTP requests active at any given time
-    limit_async_requests = asyncio.Semaphore(args.limit_async_requests)
-    batch_size = args.batch_size
+    limit_async_requests = asyncio.Semaphore(limit_async_requests)
+    batch_size = batch_size
 
     folio_client = folioclient.FolioClient(
-        args.okapi_url,
-        args.tenant_id,
-        args.username,
-        args.folio_password
-        or os.environ.get("FOLIO_PASS", "")
-        or getpass.getpass(
-            "Enter your FOLIO password: ",
-        ),
+        gateway_url,
+        tenant_id,
+        username,
+        password
     )
 
     # Set the member tenant id if provided to support FOLIO ECS multi-tenant environments
-    if args.member_tenant_id:
-        folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
+    if member_tenant_id:
+        folio_client.okapi_headers["x-okapi-tenant"] = member_tenant_id
 
-    user_file_path = Path(args.user_file_path)
-    report_file_base_path = Path(args.report_file_base_path)
+    user_file_path = user_file_path
+    report_file_base_path = report_file_base_path
     log_file_path = (
         report_file_base_path
         / f"log_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.log"
@@ -1006,43 +1018,38 @@ async def main() -> None:
         report_file_base_path
         / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
     )
-    async with aiofiles.open(
-        log_file_path,
-        "w",
-    ) as logfile, aiofiles.open(
-        error_file_path, "w"
-    ) as errorfile, httpx.AsyncClient(timeout=None) as http_client:
-        try:
-            importer = UserImporter(
-                folio_client,
-                library_name,
-                batch_size,
-                limit_async_requests,
-                logfile,
-                errorfile,
-                http_client,
-                user_file_path,
-                args.user_match_key,
-                args.update_only_present_fields,
-                args.default_preferred_contact_type,
-                fields_to_protect=protect_fields,
-            )
-            await importer.do_import()
-        except Exception as ee:
-            print(f"An unknown error occurred: {ee}")
-            await logfile.write(f"An error occurred {ee}\n")
-            raise ee
+    try:
+        importer = UserImporter(
+            folio_client,
+            library_name,
+            batch_size,
+            limit_async_requests,
+            user_file_path,
+            user_match_key.value,
+            update_only_present_fields,
+            default_preferred_contact_type.value,
+            fields_to_protect=protect_fields,
+        )
+        asyncio.run(run_user_importer(importer, log_file_path, error_file_path))
+    except Exception as ee:
+        print(f"An unknown error occurred: {ee}")
+        typer.Exit(1)
 
 
-def sync_main() -> None:
-    """
-    Synchronous version of the main function.
+async def run_user_importer(importer: UserImporter, log_file_path: Path, error_file_path: Path):
+    try:
+        await importer.setup(log_file_path, error_file_path)
+        await importer.do_import()
+    except Exception as ee:
+        print(f"An unknown error occurred: {ee}")
+        await importer.logfile.write(f"An error occurred {ee}\n")
+        typer.Exit(1)
+    finally:
+        await importer.close()
 
-    This function is used to run the main function in a synchronous context.
-    """
-    asyncio.run(main())
-
+def _main():
+    typer.run(main)
 
 # Run the main function
 if __name__ == "__main__":
-    asyncio.run(main())
+    typer.run(main)

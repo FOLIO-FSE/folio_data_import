@@ -1,4 +1,4 @@
-import argparse
+import typer
 import asyncio
 import datetime
 import glob
@@ -16,6 +16,7 @@ from getpass import getpass
 from pathlib import Path
 from time import sleep
 from typing import BinaryIO, Callable, Dict, List, Union
+from typing_extensions import Annotated
 
 import folioclient
 import httpx
@@ -819,134 +820,119 @@ def set_up_cli_logging():
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-async def main() -> None:
-    """
-    Main function to run the MARC import job.
-
-    This function parses command line arguments, initializes the FolioClient,
-    and runs the MARCImportJob.
-    """
-    set_up_cli_logging()
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--gateway_url", type=str, help="The FOLIO API Gateway URL")
-    parser.add_argument("--tenant_id", type=str, help="The FOLIO tenant ID")
-    parser.add_argument(
-        "--member_tenant_id",
-        type=str,
-        help="The FOLIO ECS member tenant ID (if applicable)",
-        default="",
-    )
-    parser.add_argument("--username", type=str, help="The FOLIO username")
-    parser.add_argument("--password", type=str, help="The FOLIO password", default="")
-    parser.add_argument(
-        "--marc_file_path",
-        type=str,
-        help="The MARC file (or file glob, using shell globbing syntax) to import",
-    )
-    parser.add_argument(
-        "--import_profile_name",
-        type=str,
-        help="The name of the data import job profile to use",
-        default="",
-    )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
+def main(
+    gateway_url: Annotated[
+        str, typer.Option(
+            prompt="Please enter the FOLIO API Gateway URL", 
+            help="The FOLIO API Gateway URL",
+            envvar="FOLIO_GATEWAY_URL",
+        )
+    ],
+    tenant_id: Annotated[
+        str, typer.Option(
+            prompt="Please enter the FOLIO tenant id", help="The tenant id", envvar="FOLIO_TENANT_ID"
+        )
+    ],
+    username: Annotated[
+        str, typer.Option(
+            prompt="Please enter your FOLIO username", help="The FOLIO username", envvar="FOLIO_USERNAME"
+        )
+    ],
+    password: Annotated[
+        str, typer.Option(
+            prompt="Please enter your FOLIO Password", hide_input=True, help="The FOLIO password", envvar="FOLIO_PASSWORD"
+        )
+    ],
+    marc_file_path: str = typer.Option(
+        ..., help="The MARC file (or file glob, using shell globbing syntax) to import"
+    ),
+    member_tenant_id: Annotated[
+        str, typer.Option(
+            help="The FOLIO ECS member tenant id (if applicable)", envvar="FOLIO_MEMBER_TENANT_ID"
+        )
+    ] = "",
+    import_profile_name: str = typer.Option(
+        "", help="The name of the data import job profile to use"
+    ),
+    batch_size: int = typer.Option(
+        10,
         help="The number of source records to include in a record batch sent to FOLIO.",
-        default=10,
-    )
-    parser.add_argument(
-        "--batch_delay",
-        type=float,
-        help="The number of seconds to wait between record batches.",
-        default=0.0,
-    )
-    parser.add_argument(
-        "--preprocessor",
-        type=str,
+    ),
+    batch_delay: float = typer.Option(
+        0.0, help="The number of seconds to wait between record batches."
+    ),
+    preprocessor: str = typer.Option(
+        "",
         help=(
             "Comma-separated python import paths to Python function(s) "
             "to apply to each MARC record before sending to FOLIO. Function should take "
             "a pymarc.Record object as input and return a pymarc.Record object."
         ),
-        default="",
-    )
-
-    parser.add_argument(
-        "--split-files",
-        action="store_true",
-        help="Split files into smaller parts before importing.",
-    )
-    parser.add_argument(
-        "--split-size",
-        type=int,
-        help="The number of records to include in each split file.",
-        default=1000,
-    )
-    parser.add_argument(
-        "--split-offset",
-        type=int,
+    ),
+    split_files: bool = typer.Option(
+        False, "--split-files", help="Split files into smaller parts before importing."
+    ),
+    split_size: int = typer.Option(
+        1000, help="The number of records to include in each split file."
+    ),
+    split_offset: int = typer.Option(
+        0,
         help="The number of record batches of <split-size> to skip before starting import.",
-        default=0,
-    )
-
-    parser.add_argument(
+    ),
+    no_progress: bool = typer.Option(
+        False,
         "--no-progress",
-        action="store_true",
         help="Disable progress bars (eg. for running in a CI environment)",
-    )
-    parser.add_argument(
+        envvar="FOLIO_MARC_NO_PROGRESS"
+    ),
+    let_summary_fail: bool = typer.Option(
+        False,
         "--let-summary-fail",
-        action="store_true",
         help="Do not retry fetching the final job summary if it fails",
-    )
-    parser.add_argument(
-        "--preprocessor-config",
-        type=str,
+        envvar="FOLIO_MARC_LET_SUMMARY_FAIL"
+    ),
+    preprocessor_config: str = typer.Option(
+        None,
         help=(
             "JSON file containing configuration for preprocessor functions. "
             "This is passed to MARCPreprocessor class as a dict of dicts."
         ),
-        default=None,
+    ),
+    job_ids_file_path: str = typer.Option(
+        None, help="Path to a file to write job IDs to for later processing."
     )
-    parser.add_argument(
-        "--job-ids-file-path",
-        type=str,
-        help="Path to the file where job IDs will be saved",
-        default="marc_data_import_job_ids.txt",
-    )
+):
+    """
+    Command-line interface to batch import MARC records into FOLIO using FOLIO Data Import
+    """
+    set_up_cli_logging()
+    if not password:
+        password = typer.prompt("Enter FOLIO password: ", hide_input=True)
+    folio_client = folioclient.FolioClient(gateway_url, tenant_id, username, password)
 
-    args = parser.parse_args()
-    if not args.password:
-        args.password = getpass("Enter FOLIO password: ")
-    folio_client = folioclient.FolioClient(
-        args.gateway_url, args.tenant_id, args.username, args.password
-    )
+    if member_tenant_id:
+        folio_client.okapi_headers["x-okapi-tenant"] = member_tenant_id
 
-    # Set the member tenant id if provided to support FOLIO ECS multi-tenant environments
-    if args.member_tenant_id:
-        folio_client.okapi_headers["x-okapi-tenant"] = args.member_tenant_id
-
-    if os.path.isabs(args.marc_file_path):
-        marc_files = [Path(x) for x in glob.glob(args.marc_file_path)]
+    if os.path.isabs(marc_file_path):
+        marc_files = [Path(x) for x in glob.glob(marc_file_path)]
     else:
-        marc_files = list(Path("./").glob(args.marc_file_path))
+        marc_files = list(Path("./").glob(marc_file_path))
 
     marc_files.sort()
 
     if len(marc_files) == 0:
-        logger.critical(f"No files found matching {args.marc_file_path}. Exiting.")
+        logger.critical(f"No files found matching {marc_file_path}. Exiting.")
         sys.exit(1)
     else:
         logger.info(marc_files)
 
-    if args.preprocessor_config:
-        with open(args.preprocessor_config, "r") as f:
+    if preprocessor_config:
+        with open(preprocessor_config, "r") as f:
             preprocessor_args = json.load(f)
     else:
         preprocessor_args = {}
 
-    if not args.import_profile_name:
+    if not import_profile_name:
         try:
             import_profiles = folio_client.folio_get(
                 "/data-import-profiles/jobProfiles",
@@ -966,7 +952,7 @@ async def main() -> None:
                 )
             ]
             answers = inquirer.prompt(questions)
-            args.import_profile_name = answers["import_profile_name"]
+            import_profile_name = answers["import_profile_name"]
         except httpx.HTTPStatusError as e:
             logger.error(
                 f"HTTP Error fetching import profiles: {e}\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
@@ -977,30 +963,30 @@ async def main() -> None:
         job = MARCImportJob(
             folio_client,
             marc_files,
-            args.import_profile_name,
-            batch_size=args.batch_size,
-            batch_delay=args.batch_delay,
-            marc_record_preprocessor=args.preprocessor,
+            import_profile_name,
+            batch_size=batch_size,
+            batch_delay=batch_delay,
+            marc_record_preprocessor=preprocessor,
             preprocessor_args=preprocessor_args,
-            no_progress=bool(args.no_progress),
-            let_summary_fail=bool(args.let_summary_fail),
-            split_files=bool(args.split_files),
-            split_size=args.split_size,
-            split_offset=args.split_offset,
-            job_ids_file_path=args.job_ids_file_path,
+            no_progress=no_progress,
+            let_summary_fail=let_summary_fail,
+            split_files=split_files,
+            split_size=split_size,
+            split_offset=split_offset,
+            job_ids_file_path=job_ids_file_path,
         )
-        await job.do_work()
+        asyncio.run(job.do_work())
     except httpx.HTTPStatusError as e:
         logger.error(
             f"HTTP Error importing files: {e}\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
         )
-        sys.exit(1)
+        typer.Exit(1)
     except Exception as e:
         logger.error("Error importing files: " + str(e))
         raise
     finally:
         if job:
-            await job.wrap_up()
+            asyncio.run(job.wrap_up())
 
 
 class ExcludeLevelFilter(logging.Filter):
@@ -1021,12 +1007,8 @@ class IncludeLevelFilter(logging.Filter):
         return record.levelno == self.level
 
 
-def sync_main() -> None:
-    """
-    Synchronous main function to run the MARC import job.
-    """
-    asyncio.run(main())
-
+def _main():
+    typer.run(main)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    typer.run(main)
