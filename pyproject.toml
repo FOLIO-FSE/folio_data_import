@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "folio_data_import"
-version = "0.3.3"
+version = "0.4.0"
 description = "A python module to interact with the data importing capabilities of the open-source FOLIO ILS"
 authors = ["Brooks Travis <brooks.travis@gmail.com>"]
 license = "MIT"
@@ -8,9 +8,9 @@ readme = "README.md"
 packages = [{include = "folio_data_import", from="src"}]
 
 [tool.poetry.scripts]
-folio-data-import = "folio_data_import.__main__:sync_main"
-folio-marc-import = "folio_data_import.MARCDataImport:sync_main"
-folio-user-import = "folio_data_import.UserImport:sync_main"
+folio-data-import = "folio_data_import.__main__:app"
+folio-marc-import = "folio_data_import.MARCDataImport:_main"
+folio-user-import = "folio_data_import.UserImport:_main"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -26,7 +26,7 @@ flake8-bugbear = "^24.8.19"
 flake8-bandit = "^4.1.1"
 flake8-isort = "^6.1.1"
 flake8-docstrings = "^1.7.0"
-
+typer = "^0.17.4"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.2"
