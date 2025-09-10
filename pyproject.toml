@@ -9,8 +9,8 @@ packages = [{include = "folio_data_import", from="src"}]
 
 [tool.poetry.scripts]
 folio-data-import = "folio_data_import.__main__:app"
-folio-marc-import = "folio_data_import.MARCDataImport:_main"
-folio-user-import = "folio_data_import.UserImport:_main"
+folio-marc-import = "folio_data_import.MARCDataImport:app"
+folio-user-import = "folio_data_import.UserImport:app"
 
 [tool.poetry.dependencies]
 python = "^3.9"
