@@ -10,7 +10,7 @@ class ItemsPerSecondColumn(ProgressColumn):
         return Text(f"{task.speed:.0f}rec/s", style="progress.data.speed")
 
 class UserStatsColumn(ProgressColumn):
-    def render(self, task):
+    def render(self, task: Task) -> Text:
         created = task.fields.get("created", 0)
         updated = task.fields.get("updated", 0)
         failed = task.fields.get("failed", 0)
