@@ -88,6 +88,7 @@ class UserImporter:  # noqa: R0902
         only_update_present_fields: bool = False,
         default_preferred_contact_type: str = "002",
         fields_to_protect: List[str] = [],
+        no_progress: bool = False,
     ) -> None:
         self.limit_simultaneous_requests = limit_simultaneous_requests
         self.batch_size = batch_size
@@ -112,6 +113,7 @@ class UserImporter:  # noqa: R0902
         self.lock: asyncio.Lock = asyncio.Lock()
         self.logs: dict = {"created": 0, "updated": 0, "failed": 0}
         self.fields_to_protect = set(fields_to_protect)
+        self.no_progress = no_progress
 
     @staticmethod
     def build_ref_data_id_map(
@@ -929,7 +931,7 @@ class UserImporter:  # noqa: R0902
                 )
             self.progress = progress
             self.task_progress = progress.add_task(
-                "Importing users: ", total=total_lines, created=0, updated=0, failed=0
+                "Importing users: ", total=total_lines, created=0, updated=0, failed=0, visible=not self.no_progress
             )  # Add a task to the progress bar
             openfile.seek(0)
             tasks = []
@@ -1108,6 +1110,11 @@ def main(
         case_sensitive=False,
         help="The default preferred contact type to use if the provided value is not valid or not present",
     ),
+    no_progress: bool = typer.Option(
+        False,
+        "--no-progress",
+        help="Do not display the progress bar",
+    ),
 ) -> None:
     """
     Command-line interface to batch import users into FOLIO
@@ -1144,6 +1151,7 @@ def main(
             update_only_present_fields,
             default_preferred_contact_type.value,
             fields_to_protect=protect_fields,
+            no_progress=no_progress
         )
         asyncio.run(run_user_importer(importer, error_file_path))
     except Exception as ee:
