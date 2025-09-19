@@ -39,6 +39,11 @@ class PreferredContactType(Enum):
     TEXT = "003"
     PHONE = "004"
     MOBILE = "005"
+    _001 = "mail"
+    _002 = "email"
+    _003 = "text"
+    _004 = "phone"
+    _005 = "mobile"
 
 
 class UserMatchKeys(Enum):
