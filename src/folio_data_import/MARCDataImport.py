@@ -1088,7 +1088,7 @@ def main(
         asyncio.run(run_job(job))
     except Exception as e:
         logger.error("Could not initialize MARCImportJob: " + str(e))
-        typer.Exit(1)
+        raise typer.Exit(1)
 
 
 async def run_job(job):

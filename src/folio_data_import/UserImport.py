@@ -764,7 +764,7 @@ class UserImporter:  # noqa: R0902
                             f"{new_user_obj['id']}: "
                             f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
                         )
-                        logger.error(pu_error_message + "\n")
+                        logger.error(pu_error_message)
                 await self.handle_service_points_user(
                     spu_obj, existing_spu, new_user_obj
                 )
@@ -1148,7 +1148,7 @@ def main(
         asyncio.run(run_user_importer(importer, error_file_path))
     except Exception as ee:
         logger.critical(f"An unknown error occurred: {ee}")
-        typer.Exit(1)
+        raise typer.Exit(1)
 
 
 async def run_user_importer(importer: UserImporter, error_file_path: Path):
