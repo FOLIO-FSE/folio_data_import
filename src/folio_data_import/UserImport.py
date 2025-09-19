@@ -1113,7 +1113,7 @@ def main(
     no_progress: bool = typer.Option(
         False,
         "--no-progress",
-        help="Do not display the progress bar",
+        help="Disable progress bar display during user import",
     ),
 ) -> None:
     """
