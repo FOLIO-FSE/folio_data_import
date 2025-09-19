@@ -41,7 +41,7 @@ Make sure to activate the virtual environment created by Poetry before running t
 ### folio-data-import
 This command provides access to subcommands for importing user and marc data. To import users:
 ```shell
-folio-data-import user --help
+folio-data-import users --help
 ```
 (for more information, see [folio-user-import](#folio-user-import), below)
 
