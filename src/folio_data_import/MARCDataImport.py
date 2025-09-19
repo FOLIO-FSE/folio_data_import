@@ -31,6 +31,7 @@ from rich.progress import (
     SpinnerColumn,
     MofNCompleteColumn,
 )
+from rich.logging import RichHandler
 from folio_data_import.custom_exceptions import FolioDataImportBatchError, FolioDataImportJobError
 from folio_data_import.marc_preprocessors._preprocessors import MARCPreprocessor
 from folio_data_import._progress import ItemsPerSecondColumn
@@ -861,7 +862,7 @@ def set_up_cli_logging():
         isinstance(h, logging.StreamHandler) and h.stream == sys.stderr
         for h in logger.handlers
     ):
-        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler = RichHandler(show_level=False, show_time=False, omit_repeated_times=False, show_path=False)
         stream_handler.setLevel(logging.INFO)
         stream_handler.addFilter(ExcludeLevelFilter(DATA_ISSUE_LVL_NUM))
         # stream_handler.addFilter(ExcludeLevelFilter(25))
