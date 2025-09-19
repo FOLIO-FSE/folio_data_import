@@ -1,11 +1,11 @@
 [tool.poetry]
 name = "folio_data_import"
 version = "0.4.1"
-description = "A python module to interact with the data importing capabilities of the open-source FOLIO ILS"
+description = "A python module to perform bulk import of data into a FOLIO environment. Currently supports MARC and user data import."
 authors = ["Brooks Travis <brooks.travis@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "folio_data_import", from="src"}]
+packages = [{ include = "folio_data_import", from = "src" }]
 
 [tool.poetry.scripts]
 folio-data-import = "folio_data_import.__main__:app"
