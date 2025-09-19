@@ -131,3 +131,4 @@ import-error.json
 snapshot-users*.json*
 import_complete/
 sample_mrc/
+failed*.txt
