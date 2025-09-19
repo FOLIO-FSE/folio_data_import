@@ -1,21 +1,32 @@
-from enum import Enum
-from typing_extensions import Annotated
-import typer
 import asyncio
 import datetime
-import getpass
 import json
-import os
+import logging
+import sys
 import time
 import uuid
 from datetime import datetime as dt
+from enum import Enum
 from pathlib import Path
-from typing import Tuple, List
+from typing import List, Tuple
 
 import aiofiles
 import folioclient
 import httpx
+import typer
 from aiofiles.threadpool.text import AsyncTextIOWrapper
+from rich.logging import RichHandler
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+from typing_extensions import Annotated
+
+from folio_data_import._progress import ItemsPerSecondColumn, UserStatsColumn
 
 try:
     utc = datetime.UTC
@@ -23,6 +34,8 @@ except AttributeError:
     import zoneinfo
 
     utc = zoneinfo.ZoneInfo("UTC")
+
+logger = logging.getLogger(__name__)
 
 # Mapping of preferred contact type IDs to their corresponding values
 PREFERRED_CONTACT_TYPES_MAP = {
@@ -132,7 +145,7 @@ class UserImporter:  # noqa: R0902
         except ValueError:
             return False
 
-    async def setup(self, log_file_path: Path, error_file_path: Path) -> None:
+    async def setup(self, error_file_path: Path) -> None:
         """
         Sets up the importer by initializing necessary resources.
 
@@ -140,7 +153,6 @@ class UserImporter:  # noqa: R0902
             log_file_path (Path): The path to the log file.
             error_file_path (Path): The path to the error file.
         """
-        self.logfile = await aiofiles.open(log_file_path, "w", encoding="utf-8")
         self.errorfile = await aiofiles.open(error_file_path, "w", encoding="utf-8")
 
     async def close(self) -> None:
@@ -148,7 +160,6 @@ class UserImporter:  # noqa: R0902
         Closes the importer by releasing any resources.
 
         """
-        await self.logfile.close()
         await self.errorfile.close()
 
     async def do_import(self) -> None:
@@ -266,7 +277,7 @@ class UserImporter:  # noqa: R0902
                         self.validate_uuid(address["addressTypeId"])
                         and address["addressTypeId"] in self.address_type_map.values()
                     ):
-                        await self.logfile.write(
+                        logger.debug(
                             f"Row {line_number}: Address type {address['addressTypeId']} is a UUID, "
                             f"skipping mapping\n"
                         )
@@ -278,11 +289,7 @@ class UserImporter:  # noqa: R0902
                         mapped_addresses.append(address)
                 except KeyError:
                     if address["addressTypeId"] not in self.address_type_map.values():
-                        print(
-                            f"Row {line_number}: Address type {address['addressTypeId']} not found"
-                            f", removing address"
-                        )
-                        await self.logfile.write(
+                        logger.error(
                             f"Row {line_number}: Address type {address['addressTypeId']} not found"
                             f", removing address\n"
                         )
@@ -305,7 +312,7 @@ class UserImporter:  # noqa: R0902
                 self.validate_uuid(user_obj["patronGroup"])
                 and user_obj["patronGroup"] in self.patron_group_map.values()
             ):
-                await self.logfile.write(
+                logger.debug(
                     f"Row {line_number}: Patron group {user_obj['patronGroup']} is a UUID, "
                     f"skipping mapping\n"
                 )
@@ -313,11 +320,7 @@ class UserImporter:  # noqa: R0902
                 user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
         except KeyError:
             if user_obj["patronGroup"] not in self.patron_group_map.values():
-                print(
-                    f"Row {line_number}: Patron group {user_obj['patronGroup']} not found, "
-                    f"removing patron group"
-                )
-                await self.logfile.write(
+                logger.error(
                     f"Row {line_number}: Patron group {user_obj['patronGroup']} not found in, "
                     f"removing patron group\n"
                 )
@@ -341,18 +344,14 @@ class UserImporter:  # noqa: R0902
                     self.validate_uuid(department)
                     and department in self.department_map.values()
                 ):
-                    await self.logfile.write(
+                    logger.debug(
                         f"Row {line_number}: Department {department} is a UUID, skipping mapping\n"
                     )
                     mapped_departments.append(department)
                 else:
                     mapped_departments.append(self.department_map[department])
             except KeyError:
-                print(
-                    f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
-                    f"excluding department from user"
-                )
-                await self.logfile.write(
+                logger.error(
                     f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
                     f"excluding department from user\n"
                 )
@@ -459,13 +458,9 @@ class UserImporter:  # noqa: R0902
             else:
                 existing_user["personal"]["preferredContactTypeId"] = current_pref_contact if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP else self.default_preferred_contact_type
         else:
-            print(
-                f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP}\n"
+            logger.info(
+                f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP} "
                 f"Setting preferred contact type to {self.default_preferred_contact_type} or using existing value"
-            )
-            await self.logfile.write(
-                f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP}\n"
-                f"Setting preferred contact type to {self.default_preferred_contact_type} or using existing value\n"
             )
             mapped_contact_type = existing_user.get("personal", {}).get(
                 "preferredContactTypeId", ""
@@ -495,11 +490,7 @@ class UserImporter:  # noqa: R0902
                 self.logs["updated"] += 1
                 return existing_user
             except Exception as ee:
-                print(
-                    f"Row {line_number}: User update failed: "
-                    f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
-                )
-                await self.logfile.write(
+                logger.error(
                     f"Row {line_number}: User update failed: "
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
                 )
@@ -513,11 +504,7 @@ class UserImporter:  # noqa: R0902
                 new_user = await self.create_new_user(user_obj)
                 return new_user
             except Exception as ee:
-                print(
-                    f"Row {line_number}: User creation failed: "
-                    f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
-                )
-                await self.logfile.write(
+                logger.error(
                     f"Row {line_number}: User creation failed: "
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
                 )
@@ -611,10 +598,8 @@ class UserImporter:  # noqa: R0902
             None
         """
         if existing_rp:
-            # print(existing_rp)
             await self.update_existing_rp(rp_obj, existing_rp)
         else:
-            # print(new_user_obj)
             await self.create_new_rp(new_user_obj)
 
     async def create_new_rp(self, new_user_obj):
@@ -632,7 +617,6 @@ class UserImporter:  # noqa: R0902
         """
         rp_obj = {"holdShelf": True, "delivery": False}
         rp_obj["userId"] = new_user_obj["id"]
-        # print(rp_obj)
         response = await self.http_client.post(
             self.folio_client.gateway_url
             + "/request-preference-storage/request-preference",
@@ -656,7 +640,6 @@ class UserImporter:  # noqa: R0902
             None
         """
         existing_rp.update(rp_obj)
-        # print(existing_rp)
         response = await self.http_client.put(
             self.folio_client.gateway_url
             + f"/request-preference-storage/request-preference/{existing_rp['id']}",
@@ -723,11 +706,7 @@ class UserImporter:  # noqa: R0902
                             rp_obj, existing_rp, new_user_obj
                         )
                     else:
-                        print(
-                            f"Row {line_number}: Creating default request preference object"
-                            f" for {new_user_obj['id']}"
-                        )
-                        await self.logfile.write(
+                        logger.debug(
                             f"Row {line_number}: Creating default request preference object"
                             f" for {new_user_obj['id']}\n"
                         )
@@ -738,8 +717,7 @@ class UserImporter:  # noqa: R0902
                         f"{new_user_obj['id']}: "
                         f"{str(getattr(getattr(ee, 'response', ee), 'text', str(ee)))}"
                     )
-                    print(rp_error_message)
-                    await self.logfile.write(rp_error_message + "\n")
+                    logger.error(rp_error_message)
                 if not existing_pu:
                     try:
                         await self.create_perms_user(new_user_obj)
@@ -749,8 +727,7 @@ class UserImporter:  # noqa: R0902
                             f"{new_user_obj['id']}: "
                             f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
                         )
-                        print(pu_error_message)
-                        await self.logfile.write(pu_error_message + "\n")
+                        logger.error(pu_error_message + "\n")
                 await self.handle_service_points_user(spu_obj, existing_spu, new_user_obj)
 
     async def map_service_points(self, spu_obj, existing_user):
@@ -769,14 +746,14 @@ class UserImporter:  # noqa: R0902
             for sp in spu_obj.pop("servicePointsIds", []):
                 try:
                     if self.validate_uuid(sp) and sp in self.service_point_map.values():
-                        await self.logfile.write(
+                        logger.debug(
                             f"Service point {sp} is a UUID, skipping mapping\n"
                         )
                         mapped_service_points.append(sp)
                     else:
                         mapped_service_points.append(self.service_point_map[sp])
                 except KeyError:
-                    print(
+                    logger.error(
                         f'Service point "{sp}" not found, excluding service point from user: '
                         f'{self.service_point_map}'
                     )
@@ -786,21 +763,21 @@ class UserImporter:  # noqa: R0902
             sp_code = spu_obj.pop('defaultServicePointId', '')
             try:
                 if self.validate_uuid(sp_code) and sp_code in self.service_point_map.values():
-                    await self.logfile.write(
+                    logger.debug(
                         f"Default service point {sp_code} is a UUID, skipping mapping\n"
                     )
                     mapped_sp_id = sp_code
                 else:
                     mapped_sp_id = self.service_point_map[sp_code]
                 if mapped_sp_id not in spu_obj.get('servicePointsIds', []):
-                    print(
+                    logger.info(
                         f'Default service point "{sp_code}" not found in assigned service points, '
                         'excluding default service point from user'
                     )
                 else:
                     spu_obj['defaultServicePointId'] = mapped_sp_id
             except KeyError:
-                print(
+                logger.error(
                     f'Default service point "{sp_code}" not found, excluding default service '
                     f'point from user: {existing_user["id"]}'
                 )
@@ -889,36 +866,87 @@ class UserImporter:  # noqa: R0902
         Args:
             openfile: The file or file-like object to process.
         """
-        tasks = []
-        for line_number, user in enumerate(openfile):
-            tasks.append(self.process_line(user, line_number))
-            if len(tasks) == self.batch_size:
+        with Progress(
+            "{task.description}",
+            SpinnerColumn(),
+            BarColumn(),
+            MofNCompleteColumn(),
+            UserStatsColumn(),
+            "[",
+            TimeElapsedColumn(),
+            "<",
+            TimeRemainingColumn(),
+            "/",
+            ItemsPerSecondColumn(),
+            "]",
+
+        ) as progress:
+            with open(openfile.name, "rb") as f:
+                total_lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b""))
+            self.progress = progress
+            self.task_progress = progress.add_task("Importing users: ", total=total_lines, created=0, updated=0, failed=0)
+            openfile.seek(0)
+            tasks = []
+            for line_number, user in enumerate(openfile):
+                tasks.append(self.process_line(user, line_number))
+                if len(tasks) == self.batch_size:
+                    start = time.time()
+                    await asyncio.gather(*tasks)
+                    duration = time.time() - start
+                    async with self.lock:
+                        progress.update(self.task_progress, advance=len(tasks), created=self.logs['created'], updated=self.logs['updated'], failed=self.logs['failed'])
+                        message = (
+                            f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
+                            f"Batch of {self.batch_size} users processed in {duration:.2f} "
+                            f"seconds. - Users created: {self.logs['created']} - Users updated: "
+                            f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
+                        )
+                        logger.info(message)
+                    tasks = []
+            if tasks:
                 start = time.time()
                 await asyncio.gather(*tasks)
                 duration = time.time() - start
                 async with self.lock:
+                    progress.update(self.task_progress, advance=len(tasks), created=self.logs['created'], updated=self.logs['updated'], failed=self.logs['failed'])
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                        f"Batch of {self.batch_size} users processed in {duration:.2f} "
-                        f"seconds. - Users created: {self.logs['created']} - Users updated: "
+                        f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
+                        f"Users created: {self.logs['created']} - Users updated: "
                         f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
                     )
-                    print(message)
-                    await self.logfile.write(message + "\n")
-                tasks = []
-        if tasks:
-            start = time.time()
-            await asyncio.gather(*tasks)
-            duration = time.time() - start
-            async with self.lock:
-                message = (
-                    f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                    f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
-                    f"Users created: {self.logs['created']} - Users updated: "
-                    f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
-                )
-                print(message)
-                await self.logfile.write(message + "\n")
+                    logger.info(message)
+
+
+def set_up_cli_logging():
+    """
+    This function sets up logging for the CLI.
+    """
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    # Set up file and stream handlers
+    file_handler = logging.FileHandler(
+        "folio_user_import_{}.log".format(dt.now().strftime("%Y%m%d%H%M%S"))
+    )
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    if not any(
+        isinstance(h, logging.StreamHandler) and h.stream == sys.stderr
+        for h in logger.handlers
+    ):
+        stream_handler = RichHandler()
+        stream_handler.setLevel(logging.WARNING)
+        stream_formatter = logging.Formatter("%(message)s")
+        stream_handler.setFormatter(stream_formatter)
+        logger.addHandler(stream_handler)
+
+    # Stop httpx from logging info messages to the console
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 app = typer.Typer()
 
@@ -993,6 +1021,7 @@ def main(
     """
     Command-line interface to batch import users into FOLIO
     """
+    set_up_cli_logging()
     protect_fields = [
         f.strip() for f in fields_to_protect.split(",")
         if f.strip()
@@ -1017,10 +1046,10 @@ def main(
 
     user_file_path = user_file_path
     report_file_base_path = report_file_base_path
-    log_file_path = (
-        report_file_base_path
-        / f"log_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.log"
-    )
+    # log_file_path = (
+    #     report_file_base_path
+    #     / f"log_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.log"
+    # )
     error_file_path = (
         report_file_base_path
         / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
@@ -1037,19 +1066,18 @@ def main(
             default_preferred_contact_type.value,
             fields_to_protect=protect_fields,
         )
-        asyncio.run(run_user_importer(importer, log_file_path, error_file_path))
+        asyncio.run(run_user_importer(importer, error_file_path))
     except Exception as ee:
-        print(f"An unknown error occurred: {ee}")
+        logger.critical(f"An unknown error occurred: {ee}")
         typer.Exit(1)
 
 
-async def run_user_importer(importer: UserImporter, log_file_path: Path, error_file_path: Path):
+async def run_user_importer(importer: UserImporter, error_file_path: Path):
     try:
-        await importer.setup(log_file_path, error_file_path)
+        await importer.setup(error_file_path)
         await importer.do_import()
     except Exception as ee:
-        print(f"An unknown error occurred: {ee}")
-        await importer.logfile.write(f"An error occurred {ee}\n")
+        logger.critical(f"An unknown error occurred: {ee}")
         typer.Exit(1)
     finally:
         await importer.close()
