@@ -458,7 +458,7 @@ class UserImporter:  # noqa: R0902
             else:
                 existing_user["personal"]["preferredContactTypeId"] = current_pref_contact if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP else self.default_preferred_contact_type
         else:
-            logger.info(
+            logger.warning(
                 f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP} "
                 f"Setting preferred contact type to {self.default_preferred_contact_type} or using existing value"
             )
@@ -770,7 +770,7 @@ class UserImporter:  # noqa: R0902
                 else:
                     mapped_sp_id = self.service_point_map[sp_code]
                 if mapped_sp_id not in spu_obj.get('servicePointsIds', []):
-                    logger.info(
+                    logger.warning(
                         f'Default service point "{sp_code}" not found in assigned service points, '
                         'excluding default service point from user'
                     )
@@ -938,7 +938,7 @@ def set_up_cli_logging():
         isinstance(h, logging.StreamHandler) and h.stream == sys.stderr
         for h in logger.handlers
     ):
-        stream_handler = RichHandler()
+        stream_handler = RichHandler(show_level=False, show_time=False, omit_repeated_times=False, show_path=False)
         stream_handler.setLevel(logging.WARNING)
         stream_formatter = logging.Formatter("%(message)s")
         stream_handler.setFormatter(stream_formatter)
