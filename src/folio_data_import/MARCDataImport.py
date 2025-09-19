@@ -12,7 +12,6 @@ import uuid
 from contextlib import ExitStack
 from datetime import datetime as dt
 from functools import cached_property
-from getpass import getpass
 from pathlib import Path
 from time import sleep
 from typing import BinaryIO, Callable, Dict, List, Union
@@ -24,10 +23,17 @@ import inquirer
 import pymarc
 import tabulate
 from humps import decamelize
-from tqdm import tqdm
-
+from rich.progress import (
+    Progress,
+    TimeElapsedColumn,
+    BarColumn,
+    TimeRemainingColumn,
+    SpinnerColumn,
+    MofNCompleteColumn,
+)
 from folio_data_import.custom_exceptions import FolioDataImportBatchError, FolioDataImportJobError
 from folio_data_import.marc_preprocessors._preprocessors import MARCPreprocessor
+from folio_data_import._progress import ItemsPerSecondColumn
 
 try:
     datetime_utc = datetime.UTC
@@ -72,13 +78,24 @@ class MARCImportJob:
         batch_size (int): The number of source records to include in a record batch (default=10).
         batch_delay (float): The number of seconds to wait between record batches (default=0).
         no_progress (bool): Disable progress bars (eg. for running in a CI environment).
+        marc_record_preprocessor (list or str): A list of callables or a string representing
+            the MARC record preprocessor(s) to apply to each record before import.
+        preprocessor_args (dict): A dictionary of arguments to pass to the MARC record preprocessor(s).
+        let_summary_fail (bool): If True, will not retry or fail the import if the final job summary
+            cannot be retrieved (default=False).
+        split_files (bool): If True, will split each file into smaller jobs of size `split_size`
+        split_size (int): The number of records to include in each split file (default=1000).
+        split_offset (int): The number of split files to skip before starting processing (default=0).
+        job_ids_file_path (str): The path to the file where job IDs will be saved (default="marc_import_job_ids.txt").
+        show_file_names_in_data_import_logs (bool): If True, will set the file name for each job in the data import logs.
     """
 
     bad_records_file: io.TextIOWrapper
     failed_batches_file: io.TextIOWrapper
     job_id: str
-    pbar_sent: tqdm
-    pbar_imported: tqdm
+    progress: Progress
+    pbar_sent: int
+    pbar_imported: int
     http_client: httpx.Client
     current_file: List[Path]
     record_batch: List[dict]
@@ -108,7 +125,8 @@ class MARCImportJob:
         split_files=False,
         split_size=1000,
         split_offset=0,
-        job_ids_file_path: str = ""
+        job_ids_file_path: str = "",
+        show_file_names_in_data_import_logs: bool = False,
     ) -> None:
         self.split_files = split_files
         self.split_size = split_size
@@ -125,6 +143,7 @@ class MARCImportJob:
             marc_record_preprocessor, **preprocessor_args
         )
         self.job_ids_file_path = job_ids_file_path or self.import_files[0].parent.joinpath("marc_import_job_ids.txt")
+        self.show_file_names_in_data_import_logs = show_file_names_in_data_import_logs
 
     async def do_work(self) -> None:
         """
@@ -265,7 +284,7 @@ class MARCImportJob:
             status = [
                 job for job in job_status["jobExecutions"] if job["id"] == self.job_id
             ][0]
-            self.pbar_imported.update(status["progress"]["current"] - self.last_current)
+            self.progress.update(self.pbar_imported, advance=status["progress"]["current"] - self.last_current)
             self.last_current = status["progress"]["current"]
         except (IndexError, ValueError, KeyError):
             logger.debug(
@@ -281,8 +300,9 @@ class MARCImportJob:
                     for job in job_status["jobExecutions"]
                     if job["id"] == self.job_id
                 ][0]
-                self.pbar_imported.update(
-                    status["progress"]["current"] - self.last_current
+                self.progress.update(
+                    self.pbar_imported,
+                    advance=status["progress"]["current"] - self.last_current
                 )
                 self.last_current = status["progress"]["current"]
                 self.finished = True
@@ -305,6 +325,40 @@ class MARCImportJob:
                         return await self.get_job_status()
                 else:
                     raise e
+
+    async def set_job_file_name(self) -> None:
+        """
+        Sets the file name for the current job execution.
+
+        Returns:
+            None
+        """
+        try:
+            job_object = self.http_client.get(
+                self.folio_client.gateway_url
+                + "/change-manager/jobExecutions/"
+                + self.job_id,
+                headers=self.folio_client.okapi_headers,
+            )
+            job_object.raise_for_status()
+            job_object_json = job_object.json()
+            job_object_json.update({"fileName": self.current_file[0].name})
+            set_file_name = self.http_client.put(
+                self.folio_client.gateway_url
+                + "/change-manager/jobExecutions/"
+                + self.job_id,
+                headers=self.folio_client.okapi_headers,
+                json=job_object_json,
+            )
+            set_file_name.raise_for_status()
+        except httpx.HTTPError as e:
+            logger.error(
+                "Error setting job file name: "
+                + str(e)
+                + "\n"
+                + getattr(getattr(e, "response", ""), "text", "")
+            )
+            raise e
 
     async def create_folio_import_job(self) -> None:
         """
@@ -337,6 +391,8 @@ class MARCImportJob:
                 )
                 raise e
         self.job_id = create_job.json()["parentJobExecutionId"]
+        if self.show_file_names_in_data_import_logs:
+            await self.set_job_file_name()
         self.job_ids.append(self.job_id)
         logger.info(f"Created job: {self.job_id}")
 
@@ -440,14 +496,14 @@ class MARCImportJob:
             post_batch.raise_for_status()
             self.total_records_sent += len(self.record_batch)
             self.record_batch = []
-            self.pbar_sent.update(len(batch_payload["initialRecords"]))
+            self.progress.update(self.pbar_sent, advance=len(batch_payload["initialRecords"]))
         except httpx.HTTPStatusError as e:
             if (
                 e.response.status_code in [500, 400, 422]
             ):  # TODO: Update once we no longer have to support < Sunflower to just be 400
                 self.total_records_sent += len(self.record_batch)
                 self.record_batch = []
-                self.pbar_sent.update(len(batch_payload["initialRecords"]))
+                self.progress.update(self.pbar_sent, advance=len(batch_payload["initialRecords"]))
             else:
                 for record in self.record_batch:
                     self.failed_batches_file.write(record)
@@ -472,8 +528,9 @@ class MARCImportJob:
         counter = 0
         for import_file in files:
             file_path = Path(import_file.name)
-            self.pbar_sent.set_description(
-                f"Sent ({os.path.basename(import_file.name)}): "
+            self.progress.update(
+                self.pbar_sent,
+                description=f"Sent ({os.path.basename(import_file.name)}): "
             )
             reader = pymarc.MARCReader(import_file, hide_utf8_warnings=True)
             for idx, record in enumerate(reader, start=1):
@@ -622,22 +679,24 @@ class MARCImportJob:
                 raise e
             total_records = await self.read_total_records(files)
             with (
-                tqdm(
-                    desc=f"Imported ({self.job_hrid}): ",
-                    total=total_records,
-                    position=1,
-                    disable=self.no_progress,
-                ) as pbar_imported,
-                tqdm(
-                    desc="Sent: ()",
-                    total=total_records,
-                    position=0,
-                    disable=self.no_progress,
-                ) as pbar_sent,
+                Progress(
+                    "{task.description}",
+                    SpinnerColumn(),
+                    BarColumn(),
+                    MofNCompleteColumn(),
+                    TimeElapsedColumn(),
+                    TimeRemainingColumn(),
+                    ItemsPerSecondColumn(),
+                ) as import_progress,
             ):
+                self.progress = import_progress
                 try:
-                    self.pbar_sent = pbar_sent
-                    self.pbar_imported = pbar_imported
+                    self.pbar_sent = self.progress.add_task(
+                        "Sent: ", total=total_records, visible=not self.no_progress
+                    )
+                    self.pbar_imported = self.progress.add_task(
+                        f"Imported: ({self.job_hrid})", total=total_records, visible=not self.no_progress
+                    )
                     await self.process_records(files, total_records)
                     while not self.finished:
                         await self.get_job_status()
@@ -871,6 +930,11 @@ def main(
             "a pymarc.Record object as input and return a pymarc.Record object."
         ),
     ),
+    file_names_in_di_logs: bool = typer.Option(
+        False,
+        "--file-names-in-di-logs",
+        help="Show file names in FOLIO Data Import logs"
+    ),
     split_files: bool = typer.Option(
         False, "--split-files", help="Split files into smaller parts before importing."
     ),
@@ -980,6 +1044,7 @@ def main(
             split_size=split_size,
             split_offset=split_offset,
             job_ids_file_path=job_ids_file_path,
+            show_file_names_in_data_import_logs=file_names_in_di_logs,
         )
         asyncio.run(run_job(job))
     except Exception as e:
