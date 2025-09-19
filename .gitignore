@@ -129,3 +129,5 @@ scratch_pad.*
 snapshot-users.jsonl
 import-error.json
 snapshot-users*.json*
+import_complete/
+sample_mrc/
