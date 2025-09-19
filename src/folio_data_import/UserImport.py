@@ -46,6 +46,7 @@ PREFERRED_CONTACT_TYPES_MAP = {
     "005": "mobile",
 }
 
+
 class PreferredContactType(Enum):
     MAIL = "001"
     EMAIL = "002"
@@ -71,6 +72,7 @@ class UserImporter:  # noqa: R0902
     (eg. from folio_migration_tools UserTransformer task)
     from a JSON-lines file into FOLIO
     """
+
     logfile: AsyncTextIOWrapper
     errorfile: AsyncTextIOWrapper
     http_client: httpx.AsyncClient
@@ -85,7 +87,7 @@ class UserImporter:  # noqa: R0902
         user_match_key: str = "externalSystemId",
         only_update_present_fields: bool = False,
         default_preferred_contact_type: str = "002",
-        fields_to_protect: List[str] =[],
+        fields_to_protect: List[str] = [],
     ) -> None:
         self.limit_simultaneous_requests = limit_simultaneous_requests
         self.batch_size = batch_size
@@ -358,7 +360,9 @@ class UserImporter:  # noqa: R0902
         if mapped_departments:
             user_obj["departments"] = mapped_departments
 
-    async def update_existing_user(self, user_obj, existing_user, protected_fields) -> Tuple[dict, dict]:
+    async def update_existing_user(
+        self, user_obj, existing_user, protected_fields
+    ) -> Tuple[dict, dict]:
         """
         Updates an existing user with the provided user object.
 
@@ -376,7 +380,11 @@ class UserImporter:  # noqa: R0902
         """
 
         await self.set_preferred_contact_type(user_obj, existing_user)
-        preferred_contact_type = {"preferredContactTypeId": existing_user.get("personal", {}).pop("preferredContactTypeId")}
+        preferred_contact_type = {
+            "preferredContactTypeId": existing_user.get("personal", {}).pop(
+                "preferredContactTypeId"
+            )
+        }
         if self.only_update_present_fields:
             new_personal = user_obj.pop("personal", {})
             existing_personal = existing_user.pop("personal", {})
@@ -450,26 +458,39 @@ class UserImporter:  # noqa: R0902
             current_pref_contact = user_obj["personal"].get(
                 "preferredContactTypeId", ""
             )
-            if mapped_contact_type := dict([(v, k) for k, v in PREFERRED_CONTACT_TYPES_MAP.items()]).get(
+            if mapped_contact_type := dict(
+                [(v, k) for k, v in PREFERRED_CONTACT_TYPES_MAP.items()]
+            ).get(
                 current_pref_contact,
                 "",
             ):
-                existing_user["personal"]["preferredContactTypeId"] = mapped_contact_type
+                existing_user["personal"]["preferredContactTypeId"] = (
+                    mapped_contact_type
+                )
             else:
-                existing_user["personal"]["preferredContactTypeId"] = current_pref_contact if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP else self.default_preferred_contact_type
+                existing_user["personal"]["preferredContactTypeId"] = (
+                    current_pref_contact
+                    if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP
+                    else self.default_preferred_contact_type
+                )
         else:
             logger.warning(
                 f"Preferred contact type not provided or is not a valid option: {PREFERRED_CONTACT_TYPES_MAP} "
                 f"Setting preferred contact type to {self.default_preferred_contact_type} or using existing value"
             )
-            mapped_contact_type = existing_user.get("personal", {}).get(
-                "preferredContactTypeId", ""
-            ) or self.default_preferred_contact_type
+            mapped_contact_type = (
+                existing_user.get("personal", {}).get("preferredContactTypeId", "")
+                or self.default_preferred_contact_type
+            )
             if "personal" not in existing_user:
                 existing_user["personal"] = {}
-            existing_user["personal"]["preferredContactTypeId"] = mapped_contact_type or self.default_preferred_contact_type
+            existing_user["personal"]["preferredContactTypeId"] = (
+                mapped_contact_type or self.default_preferred_contact_type
+            )
 
-    async def create_or_update_user(self, user_obj, existing_user, protected_fields, line_number) -> dict:
+    async def create_or_update_user(
+        self, user_obj, existing_user, protected_fields, line_number
+    ) -> dict:
         """
         Creates or updates a user based on the given user object and existing user.
 
@@ -542,7 +563,9 @@ class UserImporter:  # noqa: R0902
             dict: A dictionary containing the protected fields and their values.
         """
         protected_fields = {}
-        protected_fields_list = existing_user.get("customFields", {}).get("protectedFields", "").split(",")
+        protected_fields_list = (
+            existing_user.get("customFields", {}).get("protectedFields", "").split(",")
+        )
         cli_fields = list(self.fields_to_protect)
         # combine and dedupe:
         all_fields = list(dict.fromkeys(protected_fields_list + cli_fields))
@@ -583,7 +606,15 @@ class UserImporter:  # noqa: R0902
             existing_pu = {}
             existing_spu = {}
             protected_fields = {}
-        return rp_obj, spu_obj, existing_user, protected_fields, existing_rp, existing_pu, existing_spu
+        return (
+            rp_obj,
+            spu_obj,
+            existing_user,
+            protected_fields,
+            existing_rp,
+            existing_pu,
+            existing_spu,
+        )
 
     async def create_or_update_rp(self, rp_obj, existing_rp, new_user_obj):
         """
@@ -690,9 +721,15 @@ class UserImporter:  # noqa: R0902
         """
         async with self.limit_simultaneous_requests:
             user_obj = await self.process_user_obj(user)
-            rp_obj, spu_obj, existing_user, protected_fields, existing_rp, existing_pu, existing_spu = (
-                await self.process_existing_user(user_obj)
-            )
+            (
+                rp_obj,
+                spu_obj,
+                existing_user,
+                protected_fields,
+                existing_rp,
+                existing_pu,
+                existing_spu,
+            ) = await self.process_existing_user(user_obj)
             await self.map_address_types(user_obj, line_number)
             await self.map_patron_groups(user_obj, line_number)
             await self.map_departments(user_obj, line_number)
@@ -728,7 +765,9 @@ class UserImporter:  # noqa: R0902
                             f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
                         )
                         logger.error(pu_error_message + "\n")
-                await self.handle_service_points_user(spu_obj, existing_spu, new_user_obj)
+                await self.handle_service_points_user(
+                    spu_obj, existing_spu, new_user_obj
+                )
 
     async def map_service_points(self, spu_obj, existing_user):
         """
@@ -755,31 +794,34 @@ class UserImporter:  # noqa: R0902
                 except KeyError:
                     logger.error(
                         f'Service point "{sp}" not found, excluding service point from user: '
-                        f'{self.service_point_map}'
+                        f"{self.service_point_map}"
                     )
             if mapped_service_points:
                 spu_obj["servicePointsIds"] = mapped_service_points
         if "defaultServicePointId" in spu_obj:
-            sp_code = spu_obj.pop('defaultServicePointId', '')
+            sp_code = spu_obj.pop("defaultServicePointId", "")
             try:
-                if self.validate_uuid(sp_code) and sp_code in self.service_point_map.values():
+                if (
+                    self.validate_uuid(sp_code)
+                    and sp_code in self.service_point_map.values()
+                ):
                     logger.debug(
                         f"Default service point {sp_code} is a UUID, skipping mapping\n"
                     )
                     mapped_sp_id = sp_code
                 else:
                     mapped_sp_id = self.service_point_map[sp_code]
-                if mapped_sp_id not in spu_obj.get('servicePointsIds', []):
+                if mapped_sp_id not in spu_obj.get("servicePointsIds", []):
                     logger.warning(
                         f'Default service point "{sp_code}" not found in assigned service points, '
-                        'excluding default service point from user'
+                        "excluding default service point from user"
                     )
                 else:
-                    spu_obj['defaultServicePointId'] = mapped_sp_id
+                    spu_obj["defaultServicePointId"] = mapped_sp_id
             except KeyError:
                 logger.error(
                     f'Default service point "{sp_code}" not found, excluding default service '
-                    f'point from user: {existing_user["id"]}'
+                    f"point from user: {existing_user['id']}"
                 )
 
     async def handle_service_points_user(self, spu_obj, existing_spu, existing_user):
@@ -853,7 +895,8 @@ class UserImporter:  # noqa: R0902
         """
         existing_spu.update(spu_obj)
         response = await self.http_client.put(
-            self.folio_client.gateway_url + f"/service-points-users/{existing_spu['id']}",
+            self.folio_client.gateway_url
+            + f"/service-points-users/{existing_spu['id']}",
             headers=self.folio_client.okapi_headers,
             json=existing_spu,
         )
@@ -866,7 +909,7 @@ class UserImporter:  # noqa: R0902
         Args:
             openfile: The file or file-like object to process.
         """
-        with Progress(
+        with Progress(  # Set up the progress bar
             "{task.description}",
             SpinnerColumn(),
             BarColumn(),
@@ -879,12 +922,15 @@ class UserImporter:  # noqa: R0902
             "/",
             ItemsPerSecondColumn(),
             "]",
-
         ) as progress:
             with open(openfile.name, "rb") as f:
-                total_lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b""))
+                total_lines = sum(
+                    buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b"")
+                )
             self.progress = progress
-            self.task_progress = progress.add_task("Importing users: ", total=total_lines, created=0, updated=0, failed=0)
+            self.task_progress = progress.add_task(
+                "Importing users: ", total=total_lines, created=0, updated=0, failed=0
+            )  # Add a task to the progress bar
             openfile.seek(0)
             tasks = []
             for line_number, user in enumerate(openfile):
@@ -894,7 +940,13 @@ class UserImporter:  # noqa: R0902
                     await asyncio.gather(*tasks)
                     duration = time.time() - start
                     async with self.lock:
-                        progress.update(self.task_progress, advance=len(tasks), created=self.logs['created'], updated=self.logs['updated'], failed=self.logs['failed'])
+                        progress.update(
+                            self.task_progress,
+                            advance=len(tasks),
+                            created=self.logs["created"],
+                            updated=self.logs["updated"],
+                            failed=self.logs["failed"],
+                        )
                         message = (
                             f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                             f"Batch of {self.batch_size} users processed in {duration:.2f} "
@@ -908,7 +960,13 @@ class UserImporter:  # noqa: R0902
                 await asyncio.gather(*tasks)
                 duration = time.time() - start
                 async with self.lock:
-                    progress.update(self.task_progress, advance=len(tasks), created=self.logs['created'], updated=self.logs['updated'], failed=self.logs['failed'])
+                    progress.update(
+                        self.task_progress,
+                        advance=len(tasks),
+                        created=self.logs["created"],
+                        updated=self.logs["updated"],
+                        failed=self.logs["failed"],
+                    )
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                         f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
@@ -938,7 +996,12 @@ def set_up_cli_logging():
         isinstance(h, logging.StreamHandler) and h.stream == sys.stderr
         for h in logger.handlers
     ):
-        stream_handler = RichHandler(show_level=False, show_time=False, omit_repeated_times=False, show_path=False)
+        stream_handler = RichHandler(
+            show_level=False,
+            show_time=False,
+            omit_repeated_times=False,
+            show_path=False,
+        )
         stream_handler.setLevel(logging.WARNING)
         stream_formatter = logging.Formatter("%(message)s")
         stream_handler.setFormatter(stream_formatter)
@@ -950,82 +1013,107 @@ def set_up_cli_logging():
 
 app = typer.Typer()
 
+
 @app.command()
 def main(
     gateway_url: Annotated[
-        str, typer.Option(...,
-            prompt="Please enter the FOLIO API Gateway URL", 
+        str,
+        typer.Option(
+            ...,
+            prompt="Please enter the FOLIO API Gateway URL",
             help="The FOLIO API Gateway URL",
             envvar="FOLIO_GATEWAY_URL",
-        )
+        ),
     ],
     tenant_id: Annotated[
-        str, typer.Option(...,
-            prompt="Please enter the FOLIO tenant id", help="The tenant id", envvar="FOLIO_TENANT_ID"
-        )
+        str,
+        typer.Option(
+            ...,
+            prompt="Please enter the FOLIO tenant id",
+            help="The tenant id",
+            envvar="FOLIO_TENANT_ID",
+        ),
     ],
     username: Annotated[
-        str, typer.Option(...,
-            prompt="Please enter your FOLIO username", help="The FOLIO username", envvar="FOLIO_USERNAME"
-        )
+        str,
+        typer.Option(
+            ...,
+            prompt="Please enter your FOLIO username",
+            help="The FOLIO username",
+            envvar="FOLIO_USERNAME",
+        ),
     ],
     password: Annotated[
-        str, typer.Option(...,
-            prompt="Please enter your FOLIO Password", hide_input=True, help="The FOLIO password", envvar="FOLIO_PASSWORD"
-        )
+        str,
+        typer.Option(
+            ...,
+            prompt="Please enter your FOLIO Password",
+            hide_input=True,
+            help="The FOLIO password",
+            envvar="FOLIO_PASSWORD",
+        ),
     ],
     library_name: Annotated[
-        str, typer.Option(...,
-            prompt="Please enter the library name", help="The name of the library", envvar="FOLIO_LIBRARY_NAME"
-        )
+        str,
+        typer.Option(
+            ...,
+            prompt="Please enter the library name",
+            help="The name of the library",
+            envvar="FOLIO_LIBRARY_NAME",
+        ),
     ],
     user_file_path: Annotated[
         Path, typer.Option(..., help="The path to the user file")
     ],
     member_tenant_id: Annotated[
-        str, typer.Option(
+        str,
+        typer.Option(
             help="The FOLIO ECS member tenant id (if applicable)",
-            envvar="FOLIO_MEMBER_TENANT_ID"
-        )
+            envvar="FOLIO_MEMBER_TENANT_ID",
+        ),
     ] = "",
     fields_to_protect: Annotated[
-        str, typer.Option(
+        str,
+        typer.Option(
             help="Comma-separated list of top-level or nested (dot-notation) fields to protect"
-        )
+        ),
     ] = "",
     update_only_present_fields: bool = typer.Option(
         False,
         "--update-only-present-fields",
-        help="Only update fields that are present in the new user object"
+        help="Only update fields that are present in the new user object",
     ),
     limit_async_requests: Annotated[
-        int, typer.Option(
-            help="Limit how many http requests can be made at once", envvar="FOLIO_LIMIT_ASYNC_REQUESTS"
-        )
+        int,
+        typer.Option(
+            help="Limit how many http requests can be made at once",
+            envvar="FOLIO_LIMIT_ASYNC_REQUESTS",
+        ),
     ] = 10,
     batch_size: Annotated[
-        int, typer.Option(
-            help="How many user records to process before logging statistics", envvar="FOLIO_USER_IMPORT_BATCH_SIZE"
-        )
+        int,
+        typer.Option(
+            help="How many user records to process before logging statistics",
+            envvar="FOLIO_USER_IMPORT_BATCH_SIZE",
+        ),
     ] = 250,
     report_file_base_path: Annotated[
         Path, typer.Option(help="The base path for the log and error files")
     ] = Path.cwd(),
-    user_match_key: UserMatchKeys = typer.Option(UserMatchKeys.EXTERNAL_SYSTEM_ID.value, help="The key to use to match users"),
+    user_match_key: UserMatchKeys = typer.Option(
+        UserMatchKeys.EXTERNAL_SYSTEM_ID.value, help="The key to use to match users"
+    ),
     default_preferred_contact_type: PreferredContactType = typer.Option(
         PreferredContactType.EMAIL.value,
         case_sensitive=False,
-        help="The default preferred contact type to use if the provided value is not valid or not present"
+        help="The default preferred contact type to use if the provided value is not valid or not present",
     ),
 ) -> None:
     """
     Command-line interface to batch import users into FOLIO
     """
     set_up_cli_logging()
-    protect_fields = [
-        f.strip() for f in fields_to_protect.split(",")
-        if f.strip()
-    ]
+    protect_fields = [f.strip() for f in fields_to_protect.split(",") if f.strip()]
 
     library_name = library_name
 
@@ -1033,12 +1121,7 @@ def main(
     limit_async_requests = asyncio.Semaphore(limit_async_requests)
     batch_size = batch_size
 
-    folio_client = folioclient.FolioClient(
-        gateway_url,
-        tenant_id,
-        username,
-        password
-    )
+    folio_client = folioclient.FolioClient(gateway_url, tenant_id, username, password)
 
     # Set the member tenant id if provided to support FOLIO ECS multi-tenant environments
     if member_tenant_id:
@@ -1046,10 +1129,6 @@ def main(
 
     user_file_path = user_file_path
     report_file_base_path = report_file_base_path
-    # log_file_path = (
-    #     report_file_base_path
-    #     / f"log_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.log"
-    # )
     error_file_path = (
         report_file_base_path
         / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
@@ -1082,8 +1161,10 @@ async def run_user_importer(importer: UserImporter, error_file_path: Path):
     finally:
         await importer.close()
 
+
 def _main():
     typer.run(main)
+
 
 # Run the main function
 if __name__ == "__main__":

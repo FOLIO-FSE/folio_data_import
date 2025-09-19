@@ -32,7 +32,10 @@ from rich.progress import (
     MofNCompleteColumn,
 )
 from rich.logging import RichHandler
-from folio_data_import.custom_exceptions import FolioDataImportBatchError, FolioDataImportJobError
+from folio_data_import.custom_exceptions import (
+    FolioDataImportBatchError,
+    FolioDataImportJobError,
+)
 from folio_data_import.marc_preprocessors._preprocessors import MARCPreprocessor
 from folio_data_import._progress import ItemsPerSecondColumn
 
@@ -143,7 +146,9 @@ class MARCImportJob:
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
             marc_record_preprocessor, **preprocessor_args
         )
-        self.job_ids_file_path = job_ids_file_path or self.import_files[0].parent.joinpath("marc_import_job_ids.txt")
+        self.job_ids_file_path = job_ids_file_path or self.import_files[
+            0
+        ].parent.joinpath("marc_import_job_ids.txt")
         self.show_file_names_in_data_import_logs = show_file_names_in_data_import_logs
 
     async def do_work(self) -> None:
@@ -285,7 +290,10 @@ class MARCImportJob:
             status = [
                 job for job in job_status["jobExecutions"] if job["id"] == self.job_id
             ][0]
-            self.progress.update(self.pbar_imported, advance=status["progress"]["current"] - self.last_current)
+            self.progress.update(
+                self.pbar_imported,
+                advance=status["progress"]["current"] - self.last_current,
+            )
             self.last_current = status["progress"]["current"]
         except (IndexError, ValueError, KeyError):
             logger.debug(
@@ -303,7 +311,7 @@ class MARCImportJob:
                 ][0]
                 self.progress.update(
                     self.pbar_imported,
-                    advance=status["progress"]["current"] - self.last_current
+                    advance=status["progress"]["current"] - self.last_current,
                 )
                 self.last_current = status["progress"]["current"]
                 self.finished = True
@@ -497,14 +505,18 @@ class MARCImportJob:
             post_batch.raise_for_status()
             self.total_records_sent += len(self.record_batch)
             self.record_batch = []
-            self.progress.update(self.pbar_sent, advance=len(batch_payload["initialRecords"]))
+            self.progress.update(
+                self.pbar_sent, advance=len(batch_payload["initialRecords"])
+            )
         except httpx.HTTPStatusError as e:
             if (
                 e.response.status_code in [500, 400, 422]
             ):  # TODO: Update once we no longer have to support < Sunflower to just be 400
                 self.total_records_sent += len(self.record_batch)
                 self.record_batch = []
-                self.progress.update(self.pbar_sent, advance=len(batch_payload["initialRecords"]))
+                self.progress.update(
+                    self.pbar_sent, advance=len(batch_payload["initialRecords"])
+                )
             else:
                 for record in self.record_batch:
                     self.failed_batches_file.write(record)
@@ -531,7 +543,7 @@ class MARCImportJob:
             file_path = Path(import_file.name)
             self.progress.update(
                 self.pbar_sent,
-                description=f"Sent ({os.path.basename(import_file.name)}): "
+                description=f"Sent ({os.path.basename(import_file.name)}): ",
             )
             reader = pymarc.MARCReader(import_file, hide_utf8_warnings=True)
             for idx, record in enumerate(reader, start=1):
@@ -700,7 +712,9 @@ class MARCImportJob:
                         "Sent: ", total=total_records, visible=not self.no_progress
                     )
                     self.pbar_imported = self.progress.add_task(
-                        f"Imported: ({self.job_hrid})", total=total_records, visible=not self.no_progress
+                        f"Imported: ({self.job_hrid})",
+                        total=total_records,
+                        visible=not self.no_progress,
                     )
                     await self.process_records(files, total_records)
                     while not self.finished:
@@ -862,7 +876,12 @@ def set_up_cli_logging():
         isinstance(h, logging.StreamHandler) and h.stream == sys.stderr
         for h in logger.handlers
     ):
-        stream_handler = RichHandler(show_level=False, show_time=False, omit_repeated_times=False, show_path=False)
+        stream_handler = RichHandler(
+            show_level=False,
+            show_time=False,
+            omit_repeated_times=False,
+            show_path=False,
+        )
         stream_handler.setLevel(logging.INFO)
         stream_handler.addFilter(ExcludeLevelFilter(DATA_ISSUE_LVL_NUM))
         # stream_handler.addFilter(ExcludeLevelFilter(25))
@@ -883,39 +902,54 @@ def set_up_cli_logging():
     # Stop httpx from logging info messages to the console
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+
 app = typer.Typer()
+
 
 @app.command()
 def main(
     gateway_url: Annotated[
-        str, typer.Option(
-            prompt="Please enter the FOLIO API Gateway URL", 
+        str,
+        typer.Option(
+            prompt="Please enter the FOLIO API Gateway URL",
             help="The FOLIO API Gateway URL",
             envvar="FOLIO_GATEWAY_URL",
-        )
+        ),
     ],
     tenant_id: Annotated[
-        str, typer.Option(
-            prompt="Please enter the FOLIO tenant id", help="The tenant id", envvar="FOLIO_TENANT_ID"
-        )
+        str,
+        typer.Option(
+            prompt="Please enter the FOLIO tenant id",
+            help="The tenant id",
+            envvar="FOLIO_TENANT_ID",
+        ),
     ],
     username: Annotated[
-        str, typer.Option(
-            prompt="Please enter your FOLIO username", help="The FOLIO username", envvar="FOLIO_USERNAME"
-        )
+        str,
+        typer.Option(
+            prompt="Please enter your FOLIO username",
+            help="The FOLIO username",
+            envvar="FOLIO_USERNAME",
+        ),
     ],
     password: Annotated[
-        str, typer.Option(
-            prompt="Please enter your FOLIO Password", hide_input=True, help="The FOLIO password", envvar="FOLIO_PASSWORD"
-        )
+        str,
+        typer.Option(
+            prompt="Please enter your FOLIO Password",
+            hide_input=True,
+            help="The FOLIO password",
+            envvar="FOLIO_PASSWORD",
+        ),
     ],
     marc_file_path: str = typer.Option(
         ..., help="The MARC file (or file glob, using shell globbing syntax) to import"
     ),
     member_tenant_id: Annotated[
-        str, typer.Option(
-            help="The FOLIO ECS member tenant id (if applicable)", envvar="FOLIO_MEMBER_TENANT_ID"
-        )
+        str,
+        typer.Option(
+            help="The FOLIO ECS member tenant id (if applicable)",
+            envvar="FOLIO_MEMBER_TENANT_ID",
+        ),
     ] = "",
     import_profile_name: str = typer.Option(
         "", help="The name of the data import job profile to use"
@@ -938,7 +972,7 @@ def main(
     file_names_in_di_logs: bool = typer.Option(
         False,
         "--file-names-in-di-logs",
-        help="Show file names in FOLIO Data Import logs"
+        help="Show file names in FOLIO Data Import logs",
     ),
     split_files: bool = typer.Option(
         False, "--split-files", help="Split files into smaller parts before importing."
@@ -954,13 +988,13 @@ def main(
         False,
         "--no-progress",
         help="Disable progress bars (eg. for running in a CI environment)",
-        envvar="FOLIO_MARC_NO_PROGRESS"
+        envvar="FOLIO_MARC_NO_PROGRESS",
     ),
     let_summary_fail: bool = typer.Option(
         False,
         "--let-summary-fail",
         help="Do not retry fetching the final job summary if it fails",
-        envvar="FOLIO_MARC_LET_SUMMARY_FAIL"
+        envvar="FOLIO_MARC_LET_SUMMARY_FAIL",
     ),
     preprocessor_config: str = typer.Option(
         None,
@@ -971,7 +1005,7 @@ def main(
     ),
     job_ids_file_path: str = typer.Option(
         None, help="Path to a file to write job IDs to for later processing."
-    )
+    ),
 ):
     """
     Command-line interface to batch import MARC records into FOLIO using FOLIO Data Import
@@ -1056,6 +1090,7 @@ def main(
         logger.error("Could not initialize MARCImportJob: " + str(e))
         typer.Exit(1)
 
+
 async def run_job(job):
     try:
         await job.do_work()
@@ -1092,6 +1127,7 @@ class IncludeLevelFilter(logging.Filter):
 
 def _main():
     typer.run(main)
+
 
 if __name__ == "__main__":
     app()
