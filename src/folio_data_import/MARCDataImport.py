@@ -684,9 +684,13 @@ class MARCImportJob:
                     SpinnerColumn(),
                     BarColumn(),
                     MofNCompleteColumn(),
+                    "[",
                     TimeElapsedColumn(),
+                    "<",
                     TimeRemainingColumn(),
+                    "/",
                     ItemsPerSecondColumn(),
+                    "]",
                 ) as import_progress,
             ):
                 self.progress = import_progress
