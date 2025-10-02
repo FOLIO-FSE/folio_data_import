@@ -510,7 +510,8 @@ class UserImporter:  # noqa: R0902
             )
             try:
                 update_user.raise_for_status()
-                self.logs["updated"] += 1
+                async with self.lock:
+                    self.logs["updated"] += 1
                 return existing_user
             except Exception as ee:
                 logger.error(
@@ -520,7 +521,8 @@ class UserImporter:  # noqa: R0902
                 await self.errorfile.write(
                     json.dumps(existing_user, ensure_ascii=False) + "\n"
                 )
-                self.logs["failed"] += 1
+                async with self.lock:
+                    self.logs["failed"] += 1
                 return {}
         else:
             try:
@@ -534,7 +536,8 @@ class UserImporter:  # noqa: R0902
                 await self.errorfile.write(
                     json.dumps(user_obj, ensure_ascii=False) + "\n"
                 )
-                self.logs["failed"] += 1
+                async with self.lock:
+                    self.logs["failed"] += 1
                 return {}
 
     async def process_user_obj(self, user: str) -> dict:
