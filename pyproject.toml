@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "folio_data_import"
-version = "0.4.1"
+version = "0.4.2"
 description = "A python module to perform bulk import of data into a FOLIO environment. Currently supports MARC and user data import."
 authors = ["Brooks Travis <brooks.travis@gmail.com>"]
 license = "MIT"
@@ -25,7 +25,7 @@ flake8-bugbear = "^24.8.19"
 flake8-bandit = "^4.1.1"
 flake8-isort = "^6.1.1"
 flake8-docstrings = "^1.7.0"
-typer = "^0.17.4"
+typer = ">=0.19.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.2"
