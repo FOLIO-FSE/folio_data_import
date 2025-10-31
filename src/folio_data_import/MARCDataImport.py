@@ -981,7 +981,8 @@ def main(
                 if "marc" in profile["dataType"].lower()
             ]
             import_profile_name = questionary.select(
-                "Select an import profile:", choices=import_profile_names,
+                "Select an import profile:",
+                choices=import_profile_names,
             ).ask()
         except httpx.HTTPStatusError as e:
             logger.error(
