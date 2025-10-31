@@ -1,5 +1,3 @@
-import cyclopts
-import questionary
 import asyncio
 import datetime
 import glob
@@ -16,29 +14,32 @@ from functools import cached_property
 from pathlib import Path
 from time import sleep
 from typing import BinaryIO, Callable, Dict, List, Union
-from typing_extensions import Annotated
 
+import cyclopts
 import folioclient
 import httpx
 import pymarc
+import questionary
 import tabulate
 from humps import decamelize
-from rich.progress import (
-    Progress,
-    TimeElapsedColumn,
-    BarColumn,
-    TimeRemainingColumn,
-    SpinnerColumn,
-    MofNCompleteColumn,
-)
 from rich.logging import RichHandler
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+from typing_extensions import Annotated
+
+from folio_data_import import get_folio_connection_parameters
+from folio_data_import._progress import ItemsPerSecondColumn
 from folio_data_import.custom_exceptions import (
     FolioDataImportBatchError,
     FolioDataImportJobError,
 )
 from folio_data_import.marc_preprocessors._preprocessors import MARCPreprocessor
-from folio_data_import._progress import ItemsPerSecondColumn
-from folio_data_import import get_folio_connection_parameters
 
 try:
     datetime_utc = datetime.UTC
@@ -860,7 +861,7 @@ def set_up_cli_logging():
 app = cyclopts.App()
 
 
-@app.command
+@app.default
 def main(
     *,
     gateway_url: Annotated[

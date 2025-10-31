@@ -6,7 +6,6 @@ import sys
 import time
 import uuid
 from datetime import datetime as dt
-from enum import Enum
 from pathlib import Path
 from typing import List, Literal, Tuple
 
@@ -14,7 +13,6 @@ import aiofiles
 import cyclopts
 import folioclient
 import httpx
-import typer
 from aiofiles.threadpool.text import AsyncTextIOWrapper
 from rich.logging import RichHandler
 from rich.progress import (
@@ -49,23 +47,7 @@ PREFERRED_CONTACT_TYPES_MAP = {
 }
 
 
-class PreferredContactType(Enum):
-    MAIL = "001"
-    EMAIL = "002"
-    TEXT = "003"
-    PHONE = "004"
-    MOBILE = "005"
-    _001 = "mail"
-    _002 = "email"
-    _003 = "text"
-    _004 = "phone"
-    _005 = "mobile"
-
-
-class UserMatchKeys(Enum):
-    USERNAME = "username"
-    EMAIL = "email"
-    EXTERNAL_SYSTEM_ID = "externalSystemId"
+USER_MATCH_KEYS = ["username", "email", "externalSystemId"]
 
 
 class UserImporter:  # noqa: R0902
@@ -991,7 +973,7 @@ def set_up_cli_logging():
 app = cyclopts.App()
 
 
-@app.command
+@app.default
 def main(
     *,
     gateway_url: Annotated[
@@ -1057,6 +1039,7 @@ def main(
         no_progress (bool): Whether to disable the progress bar.
     """
     set_up_cli_logging()
+    fields_to_protect = fields_to_protect or ""
     protect_fields = [f.strip() for f in fields_to_protect.split(",") if f.strip()]
 
     library_name = library_name
@@ -1075,7 +1058,7 @@ def main(
         folio_client.tenant_id = member_tenant_id
 
     user_file_path = user_file_path
-    report_file_base_path = report_file_base_path
+    report_file_base_path = report_file_base_path or Path.cwd()
     error_file_path = (
         report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
     )
@@ -1086,16 +1069,16 @@ def main(
             batch_size,
             limit_async_requests,
             user_file_path,
-            user_match_key.value,
+            user_match_key,
             update_only_present_fields,
-            default_preferred_contact_type.value,
+            default_preferred_contact_type,
             fields_to_protect=protect_fields,
             no_progress=no_progress,
         )
         asyncio.run(run_user_importer(importer, error_file_path))
     except Exception as ee:
         logger.critical(f"An unknown error occurred: {ee}")
-        raise typer.Exit(1) from ee
+        sys.exit(1)
 
 
 async def run_user_importer(importer: UserImporter, error_file_path: Path):
@@ -1104,7 +1087,7 @@ async def run_user_importer(importer: UserImporter, error_file_path: Path):
         await importer.do_import()
     except Exception as ee:
         logger.critical(f"An unknown error occurred: {ee}")
-        typer.Exit(1)
+        sys.exit(1)
     finally:
         await importer.close()
 
