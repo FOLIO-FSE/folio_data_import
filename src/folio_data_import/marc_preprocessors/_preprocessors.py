@@ -15,7 +15,7 @@ class MARCPreprocessor:
     A class to preprocess MARC records for data import into FOLIO.
     """
 
-    def __init__(self, preprocessors: Union[str, List[Callable]], **kwargs):
+    def __init__(self, preprocessors: Union[str, List[Callable]], **kwargs) -> None:
         """
         Initialize the MARCPreprocessor with a list of preprocessors.
 
@@ -46,7 +46,9 @@ class MARCPreprocessor:
         path_args.update(self.preprocessor_args.get(func_path, {}))
         return path_args
 
-    def _get_preprocessor_functions(self, func_list: Union[str, List[Callable]]) -> List[Callable]:
+    def _get_preprocessor_functions(
+        self, func_list: str | List[Callable]
+    ) -> List[Tuple[Callable, Dict]]:
         """
         Get the preprocessor functions based on the provided names.
 
@@ -57,9 +59,9 @@ class MARCPreprocessor:
         Returns:
             List[callable]: A list of preprocessor functions.
         """
-        preprocessors = []
+        preprocessors: List[Tuple[Callable, Dict]] = []
         if isinstance(func_list, str):
-            func_list = func_list.split(",")
+            func_paths = [f.strip() for f in func_list.split(",")]
         else:
             for f in func_list:
                 if not callable(f):
@@ -67,7 +69,7 @@ class MARCPreprocessor:
                 else:
                     preprocessors.append((f, self._get_preprocessor_args(f)))
             return preprocessors
-        for f_path in func_list:
+        for f_path in func_paths:
             f_import = f_path.rsplit(".", 1)
             if len(f_import) == 1:
                 # If the function is not a full path, assume it's in the current module
@@ -116,7 +118,9 @@ def prepend_prefix_001(record: Record, prefix: str) -> Record:
         Record: The preprocessed MARC record.
     """
     if "001" in record:
-        record["001"].data = f"({prefix})" + record["001"].data
+        record["001"].data = (
+            f"({prefix})" + record["001"].data if record["001"].data else f"({prefix})"
+        )
     else:
         logger.warning("Field '001' not found in record. Skipping prefix prepend.")
     return record
@@ -205,7 +209,7 @@ def clean_non_ff_999_fields(record: Record, **kwargs) -> Record:
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
                 record["001"].value(),
-                'Record contains a 999 field with non-ff indicators: Moving field to a 945 with'
+                "Record contains a 999 field with non-ff indicators: Moving field to a 945 with"
                 ' indicators "99"',
                 field,
             )
@@ -504,7 +508,7 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
     return record
 
 
-def ordinal(n):
+def ordinal(n: int) -> str:
     s = ("th", "st", "nd", "rd") + ("th",) * 10
     v = n % 100
     if v > 13:
