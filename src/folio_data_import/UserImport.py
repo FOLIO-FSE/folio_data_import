@@ -1050,8 +1050,6 @@ def main(
     fields_to_protect = fields_to_protect or ""
     protect_fields = [f.strip() for f in fields_to_protect.split(",") if f.strip()]
 
-    library_name = library_name
-
     # Semaphore to limit the number of async HTTP requests active at any given time
     semaphore = asyncio.Semaphore(limit_async_requests)
     batch_size = batch_size
