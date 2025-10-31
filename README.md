@@ -26,11 +26,11 @@ To install the project from the git repo using Poetry, follow these steps:
 
 1. Clone the repository.
 2. Navigate to the project directory: `$ cd /path/to/folio_data_import`.
-3. Install Poetry if you haven't already: `$ pip install poetry`.
-4. Install the project and its dependencies: `$ poetry install`.
-6. Run the application using Poetry: `$ poetry run python -m folio_data_import --help`.
+3. [Install `uv`](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already.
+4. Install the project and its dependencies: `$ uv sync`.
+5. Run the application using Poetry: `$ uv run folio-data-import --help`.
 
-Make sure to activate the virtual environment created by Poetry before running the application.
+Make sure to activate the virtual environment created by `uv` before running the application.
 
 ## Usage
 
