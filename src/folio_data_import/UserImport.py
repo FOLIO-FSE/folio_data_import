@@ -24,7 +24,7 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from typing_extensions import Annotated
+from typing import Annotated
 
 from folio_data_import import get_folio_connection_parameters
 from folio_data_import._progress import ItemsPerSecondColumn, UserStatsColumn
@@ -48,7 +48,7 @@ PREFERRED_CONTACT_TYPES_MAP = {
 }
 
 
-USER_MATCH_KEYS = ["username", "email", "externalSystemId"]
+USER_MATCH_KEYS = ["username", "barcode", "externalSystemId"]
 
 
 class UserImporter:  # noqa: R0902
