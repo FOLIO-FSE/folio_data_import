@@ -928,13 +928,13 @@ def main(
         batch_size (int): The number of records to send in each batch
         batch_delay (float): The delay (in seconds) between sending each batch
         preprocessor (str): The MARC record preprocessor to use
-        file_names_in_di_logs (bool): Whether to show file names in data import logs
-        split_files (bool): Whether to split files into smaller batches
+        file_names_in_di_logs (bool): Show file names in data import logs
+        split_files (bool): Split files into smaller batches
         split_size (int): The number of records per split batch
         split_offset (int): The number of split batches to skip before starting import
-        no_progress (bool): Whether to disable progress bars
-        no_summary (bool): Whether to skip the final job summary
-        let_summary_fail (bool): Whether to let the final summary check fail without exiting
+        no_progress (bool): Disable progress bars
+        no_summary (bool): Skip the final job summary
+        let_summary_fail (bool): Let the final summary check fail without exiting
         preprocessor_config (str): Path to JSON config file for the preprocessor
         job_ids_file_path (str): Path to file to write job IDs to
     """
