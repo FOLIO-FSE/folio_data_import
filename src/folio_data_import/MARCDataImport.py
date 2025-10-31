@@ -13,7 +13,7 @@ from datetime import datetime as dt
 from functools import cached_property
 from pathlib import Path
 from time import sleep
-from typing import BinaryIO, Callable, Dict, List, Union
+from typing import BinaryIO, Callable, Dict, Generator, List, cast
 
 import cyclopts
 import folioclient
@@ -28,6 +28,7 @@ from rich.progress import (
     MofNCompleteColumn,
     Progress,
     SpinnerColumn,
+    TaskID,
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
@@ -60,14 +61,19 @@ DATA_ISSUE_LVL_NUM = 26
 logging.addLevelName(DATA_ISSUE_LVL_NUM, "DATA_ISSUES")
 
 
-def data_issues(self, msg, *args, **kws):
-    if self.isEnabledFor(DATA_ISSUE_LVL_NUM):
-        self._log(DATA_ISSUE_LVL_NUM, msg, args, **kws)
+class CustomLogger(logging.Logger):
+    """Logger subclass with custom data_issues method."""
+
+    def data_issues(self, msg: str, *args, **kws) -> None:
+        """Log data issues at custom level (26)."""
+        if self.isEnabledFor(DATA_ISSUE_LVL_NUM):
+            self._log(DATA_ISSUE_LVL_NUM, msg, args, **kws)
 
 
-logging.Logger.data_issues = data_issues
+# Set the custom logger class as the default
+logging.setLoggerClass(CustomLogger)
 
-logger = logging.getLogger(__name__)
+logger: CustomLogger = logging.getLogger(__name__)  # type: ignore[assignment]
 
 
 class MARCImportJob:
@@ -96,22 +102,21 @@ class MARCImportJob:
         show_file_names_in_data_import_logs (bool): If True, will set the file name for each job in the data import logs.
     """  # noqa: E501
 
-    bad_records_file: io.TextIOWrapper
-    failed_batches_file: io.TextIOWrapper
+    bad_records_file: BinaryIO
+    failed_batches_file: BinaryIO
     job_id: str
     progress: Progress
-    pbar_sent: int
-    pbar_imported: int
+    pbar_sent: TaskID
+    pbar_imported: TaskID
     http_client: httpx.Client
-    current_file: List[Path]
-    record_batch: List[dict]
+    current_file: List[Path] | List[BinaryIO]
+    record_batch: List[bytes]
     last_current: int = 0
     total_records_sent: int = 0
     finished: bool = False
     job_id: str = ""
     job_ids: List[str]
     job_hrid: int = 0
-    current_file: Union[List[Path], List[io.BytesIO]] = []
     _max_summary_retries: int = 2
     _max_job_retries: int = 2
     _job_retries: int = 0
@@ -122,17 +127,17 @@ class MARCImportJob:
         folio_client: folioclient.FolioClient,
         marc_files: List[Path],
         import_profile_name: str,
-        batch_size=10,
-        batch_delay=0,
-        marc_record_preprocessor: Union[List[Callable], str] = None,
-        preprocessor_args: Dict[str, Dict] = None,
-        no_progress=False,
-        no_summary=False,
-        let_summary_fail=False,
-        split_files=False,
-        split_size=1000,
-        split_offset=0,
-        job_ids_file_path: str = "",
+        batch_size: int = 10,
+        batch_delay: float = 0.0,
+        marc_record_preprocessor: List[Callable] | str | None = None,
+        preprocessor_args: Dict[str, Dict] | None = None,
+        no_progress: bool = False,
+        no_summary: bool = False,
+        let_summary_fail: bool = False,
+        split_files: bool = False,
+        split_size: int = 1000,
+        split_offset: int = 0,
+        job_ids_file_path: str | None = None,
         show_file_names_in_data_import_logs: bool = False,
     ) -> None:
         self.split_files = split_files
@@ -146,9 +151,9 @@ class MARCImportJob:
         self.import_profile_name = import_profile_name
         self.batch_size = batch_size
         self.batch_delay = batch_delay
-        self.current_retry_timeout = 0
+        self.current_retry_timeout: float | None = None
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
-            marc_record_preprocessor or "", **preprocessor_args
+            marc_record_preprocessor or "", **(preprocessor_args or {})
         )
         self.job_ids_file_path = job_ids_file_path or self.import_files[0].parent.joinpath(
             "marc_import_job_ids.txt"
@@ -251,6 +256,7 @@ class MARCImportJob:
         Raises:
             IndexError: If the job execution with the specified ID is not found.
         """
+        job_status: Dict | None = None
         try:
             self.current_retry_timeout = (
                 (self.current_retry_timeout * RETRY_TIMEOUT_RETRY_FACTOR)
@@ -267,14 +273,18 @@ class MARCImportJob:
                 self.current_retry_timeout = None
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
-            if self.current_retry_timeout <= RETRY_TIMEOUT_MAX and (
-                not hasattr(e, "response") or e.response.status_code in [502, 504, 401]
+            if (
+                self.current_retry_timeout is not None
+                and self.current_retry_timeout <= RETRY_TIMEOUT_MAX
+                and (not hasattr(e, "response") or e.response.status_code in [502, 504, 401])
             ):
                 logger.warning(f"SERVER ERROR fetching job status: {error_text}. Retrying.")
                 sleep(0.25)
                 return await self.get_job_status()
-            elif self.current_retry_timeout > RETRY_TIMEOUT_MAX and (
-                not hasattr(e, "response") or e.response.status_code in [502, 504, 401]
+            elif (
+                self.current_retry_timeout is not None
+                and self.current_retry_timeout > RETRY_TIMEOUT_MAX
+                and (not hasattr(e, "response") or e.response.status_code in [502, 504, 401])
             ):
                 logger.critical(
                     f"SERVER ERROR fetching job status: {error_text}. Max retries exceeded."
@@ -284,6 +294,9 @@ class MARCImportJob:
                 raise e
         except Exception as e:
             logger.error(f"Error fetching job status. {e}")
+
+        if job_status is None:
+            return
 
         try:
             status = [job for job in job_status["jobExecutions"] if job["id"] == self.job_id][0]
@@ -497,7 +510,7 @@ class MARCImportJob:
         await self.get_job_status()
         sleep(self.batch_delay)
 
-    async def process_records(self, files, total_records) -> None:
+    async def process_records(self, files, total_records: int) -> None:
         """
         Process records from the given files.
 
@@ -539,7 +552,8 @@ class MARCImportJob:
                         f" Writing current chunk to {self.bad_records_file.name}.",
                         "",
                     )
-                    self.bad_records_file.write(reader.current_chunk)
+                    if reader.current_chunk:
+                        self.bad_records_file.write(reader.current_chunk)
             if not self.split_files:
                 self.move_file_to_complete(file_path)
         if self.record_batch or not self.finished:
@@ -551,7 +565,7 @@ class MARCImportJob:
                 ),
             )
 
-    def move_file_to_complete(self, file_path: Path):
+    def move_file_to_complete(self, file_path: Path) -> None:
         import_complete_path = file_path.parent.joinpath("import_complete")
         if not import_complete_path.exists():
             logger.debug(f"Creating import_complete directory: {import_complete_path.absolute()}")
@@ -559,7 +573,7 @@ class MARCImportJob:
         logger.debug(f"Moving {file_path} to {import_complete_path.absolute()}")
         file_path.rename(file_path.parent.joinpath("import_complete", file_path.name))
 
-    async def create_batch_payload(self, counter, total_records, is_last) -> dict:
+    async def create_batch_payload(self, counter: int, total_records, is_last: bool) -> dict:
         """
         Create a batch payload for data import.
 
@@ -583,7 +597,7 @@ class MARCImportJob:
         }
 
     @staticmethod
-    def split_marc_file(file_path, batch_size):
+    def split_marc_file(file_path: Path, batch_size: int) -> Generator[io.BytesIO, None, None]:
         """Generator to iterate over MARC records in batches, yielding BytesIO objects."""
         with open(file_path, "rb") as f:
             batch = io.BytesIO()
@@ -645,11 +659,14 @@ class MARCImportJob:
         await self.create_folio_import_job()
         await self.set_job_profile()
         with ExitStack() as stack:
+            files: List[BinaryIO]
             try:
                 if isinstance(self.current_file[0], Path):
-                    files = [stack.enter_context(open(file, "rb")) for file in self.current_file]
+                    path_list = cast(List[Path], self.current_file)
+                    files = [stack.enter_context(open(file, "rb")) for file in path_list]
                 elif isinstance(self.current_file[0], io.BytesIO):
-                    files = [stack.enter_context(file) for file in self.current_file]
+                    bytesio_list = cast(List[io.BytesIO], self.current_file)
+                    files = [stack.enter_context(file) for file in bytesio_list]
                 else:
                     raise ValueError("Invalid file type. Must be Path or BytesIO.")
             except IndexError as e:
@@ -810,7 +827,7 @@ class MARCImportJob:
         return job_summary
 
 
-def set_up_cli_logging():
+def set_up_cli_logging() -> None:
     """
     This function sets up logging for the CLI.
     """
@@ -913,7 +930,7 @@ def main(
     let_summary_fail: bool = False,
     preprocessor_config: str | None = None,
     job_ids_file_path: str | None = None,
-):
+) -> None:
     """
     Command-line interface to batch import MARC records into FOLIO using FOLIO Data Import
 
@@ -1019,7 +1036,7 @@ def main(
         sys.exit(1)
 
 
-async def run_job(job):
+async def run_job(job: MARCImportJob):
     try:
         await job.do_work()
     except httpx.HTTPStatusError as e:
@@ -1037,7 +1054,7 @@ async def run_job(job):
 
 
 class ExcludeLevelFilter(logging.Filter):
-    def __init__(self, level):
+    def __init__(self, level) -> None:
         super().__init__()
         self.level = level
 
@@ -1046,7 +1063,7 @@ class ExcludeLevelFilter(logging.Filter):
 
 
 class IncludeLevelFilter(logging.Filter):
-    def __init__(self, level):
+    def __init__(self, level) -> None:
         super().__init__()
         self.level = level
 
