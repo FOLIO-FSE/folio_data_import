@@ -5,7 +5,7 @@ description = "A python module to perform bulk import of data into a FOLIO envir
 authors = [{ name = "Brooks Travis", email = "brooks.travis@gmail.com" }]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "folioclient>=1.0.2",
     "pymarc>=5.2.2",
