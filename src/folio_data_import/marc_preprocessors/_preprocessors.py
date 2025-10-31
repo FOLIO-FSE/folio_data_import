@@ -1,10 +1,10 @@
 import importlib
-import sys
-from typing import Callable, Dict, List, Tuple, Union
-import pymarc
 import logging
 import re
+import sys
+from typing import Callable, Dict, List, Tuple, Union
 
+import pymarc
 from pymarc.record import Record
 
 logger = logging.getLogger("folio_data_import.MARCDataImport")
@@ -20,7 +20,8 @@ class MARCPreprocessor:
         Initialize the MARCPreprocessor with a list of preprocessors.
 
         Args:
-            preprocessors (Union[str, List[Callable]]): A string of comma-separated function names or a list of callable preprocessor functions to apply.
+            preprocessors (Union[str, List[Callable]]): A string of comma-separated function names
+                or a list of callable preprocessor functions to apply.
         """
         self.preprocessor_args: Dict[str, Dict] = kwargs
         self.preprocessors: List[Tuple[Callable, Dict]] = self._get_preprocessor_functions(
@@ -50,7 +51,8 @@ class MARCPreprocessor:
         Get the preprocessor functions based on the provided names.
 
         Args:
-            func_list (Union[str, List[Callable]]): A string of comma-separated function names or a list of callable preprocessor functions.
+            func_list (Union[str, List[Callable]]): A string of comma-separated function names or a
+                list of callable preprocessor functions.
 
         Returns:
             List[callable]: A list of preprocessor functions.
@@ -61,9 +63,7 @@ class MARCPreprocessor:
         else:
             for f in func_list:
                 if not callable(f):
-                    logger.warning(
-                        f"Preprocessing function {f} is not callable. Skipping."
-                    )
+                    logger.warning(f"Preprocessing function {f} is not callable. Skipping.")
                 else:
                     preprocessors.append((f, self._get_preprocessor_args(f)))
             return preprocessors
@@ -102,7 +102,6 @@ class MARCPreprocessor:
         for proc, kwargs in self.preprocessors:
             record = proc(record, **kwargs)
         return record
-
 
 
 def prepend_prefix_001(record: Record, prefix: str) -> Record:
@@ -167,6 +166,7 @@ def strip_999_ff_fields(record: Record, **kwargs) -> Record:
             record.remove_field(field)
     return record
 
+
 def clean_999_fields(record: Record, **kwargs) -> Record:
     """
     The presence of 999 fields, with or without ff indicators, can cause
@@ -191,11 +191,13 @@ def clean_999_fields(record: Record, **kwargs) -> Record:
         record.remove_field(field)
     return record
 
+
 def clean_non_ff_999_fields(record: Record, **kwargs) -> Record:
     """
     When loading migrated MARC records from folio_migration_tools, the presence of other 999 fields
-    than those set by the migration process can cause the record to fail to load properly. This preprocessor
-    function moves all 999 fields with non-ff indicators to 945 fields with 99 indicators.
+    than those set by the migration process can cause the record to fail to load properly. This
+    preprocessor function moves all 999 fields with non-ff indicators to 945 fields with 99
+    indicators.
     """
     for field in record.get_fields("999"):
         if field.indicators != pymarc.Indicators(*["f", "f"]):
@@ -203,17 +205,19 @@ def clean_non_ff_999_fields(record: Record, **kwargs) -> Record:
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
                 record["001"].value(),
-                "Record contains a 999 field with non-ff indicators: Moving field to a 945 with indicators \"99\"",
+                'Record contains a 999 field with non-ff indicators: Moving field to a 945 with'
+                ' indicators "99"',
                 field,
             )
             _945 = pymarc.Field(
                 tag="945",
-                indicators=pymarc.Indicators("9","9"),
+                indicators=pymarc.Indicators("9", "9"),
                 subfields=field.subfields,
             )
             record.add_ordered_field(_945)
             record.remove_field(field)
     return record
+
 
 def sudoc_supercede_prep(record: Record, **kwargs) -> Record:
     """
@@ -363,7 +367,9 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
 
     for field in record.get_fields(*MAPPED_FIELDS.keys()):
         len_subs = len(field.subfields)
-        subfield_value = bool(re.sub(r"[.,-]", "", field.subfields[0].value).strip()) if len_subs else False
+        subfield_value = (
+            bool(re.sub(r"[.,-]", "", field.subfields[0].value).strip()) if len_subs else False
+        )
         if int(field.tag) > 9 and len_subs == 0:
             logger.log(
                 26,
@@ -378,7 +384,8 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
                 record["001"].value(),
-                f"{field.tag}${field.subfields[0].code} is empty, no other subfields present, removing field",
+                f"{field.tag}${field.subfields[0].code} is empty,"
+                " no other subfields present, removing field",
                 field,
             )
             record.remove_field(field)
@@ -393,15 +400,13 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
                 )
                 field.delete_subfield("a")
             for idx, subfield in enumerate(list(field.subfields), start=1):
-                if (
-                    subfield.code in MAPPED_FIELDS.get(field.tag, [])
-                    and not subfield.value
-                ):
+                if subfield.code in MAPPED_FIELDS.get(field.tag, []) and not subfield.value:
                     logger.log(
                         26,
                         "DATA ISSUE\t%s\t%s\t%s",
                         record["001"].value(),
-                        f"{field.tag}${subfield.code} ({ordinal(idx)} subfield) is empty, but other subfields have values, removing subfield",
+                        f"{field.tag}${subfield.code} ({ordinal(idx)} subfield) is empty, but "
+                        "other subfields have values, removing subfield",
                         field,
                     )
                     field.delete_subfield(subfield.code)
@@ -463,10 +468,26 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
         Record: The preprocessed MARC record.
     """
     controlled_fields = [
-        "100", "110", "111", "130",
-        "600", "610", "611", "630", "650", "651", "655",
-        "700", "710", "711", "730",
-        "800", "810", "811", "830", "880"
+        "100",
+        "110",
+        "111",
+        "130",
+        "600",
+        "610",
+        "611",
+        "630",
+        "650",
+        "651",
+        "655",
+        "700",
+        "710",
+        "711",
+        "730",
+        "800",
+        "810",
+        "811",
+        "830",
+        "880",
     ]
     for field in record.get_fields(*controlled_fields):
         _subfields = field.get_subfields("9")
