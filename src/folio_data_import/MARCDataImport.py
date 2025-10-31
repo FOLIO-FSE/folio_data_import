@@ -32,7 +32,7 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from typing_extensions import Annotated
+from typing import Annotated
 
 from folio_data_import import get_folio_connection_parameters
 from folio_data_import._progress import ItemsPerSecondColumn
