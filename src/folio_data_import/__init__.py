@@ -2,7 +2,9 @@ import importlib.metadata
 import questionary
 
 
-def get_folio_connection_parameters(gateway_url, tenant_id, username, password):
+def get_folio_connection_parameters(
+    gateway_url: str | None, tenant_id: str | None, username: str | None, password: str | None
+) -> tuple[str, str, str, str]:
     """
     Prompt for missing FOLIO connection parameters using interactive input.
 
