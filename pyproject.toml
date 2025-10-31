@@ -1,38 +1,115 @@
-[tool.poetry]
+[project]
 name = "folio_data_import"
-version = "0.4.2"
+version = "0.5.0"
 description = "A python module to perform bulk import of data into a FOLIO environment. Currently supports MARC and user data import."
-authors = ["Brooks Travis <brooks.travis@gmail.com>"]
+authors = [{ name = "Brooks Travis", email = "brooks.travis@gmail.com" }]
 license = "MIT"
 readme = "README.md"
-packages = [{ include = "folio_data_import", from = "src" }]
+requires-python = ">=3.10"
+dependencies = [
+    "folioclient>=1.0.2",
+    "pymarc>=5.2.2",
+    "pyhumps>=3.8.0",
+    "inquirer>=3.4.0",
+    "tabulate>=0.9.0",
+    "aiofiles>=24.1.0",
+    "flake8-black>=0.3.6",
+    "flake8-bugbear>=24.8.19",
+    "flake8-bandit>=4.1.1",
+    "flake8-isort>=6.1.1",
+    "flake8-docstrings>=1.7.0",
+    "typer>=0.19.2",
+    "cyclopts>=4.2.0",
+    "questionary>=2.1.1",
+]
 
-[tool.poetry.scripts]
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2",
+    "flake8>=7.1.1",
+    "black>=24.8.0",
+    "ipykernel>=6.29.5",
+    "pyrefly>=0.38.2",
+    "ruff>=0.14.2",
+]
+
+[project.scripts]
 folio-data-import = "folio_data_import.__main__:app"
 folio-marc-import = "folio_data_import.MARCDataImport:app"
 folio-user-import = "folio_data_import.UserImport:app"
 
-[tool.poetry.dependencies]
-python = "^3.9"
-folioclient = "^0.70.1"
-pymarc = "^5.2.2"
-pyhumps = "^3.8.0"
-inquirer = "^3.4.0"
-tabulate = "^0.9.0"
-aiofiles = "^24.1.0"
-flake8-black = "^0.3.6"
-flake8-bugbear = "^24.8.19"
-flake8-bandit = "^4.1.1"
-flake8-isort = "^6.1.1"
-flake8-docstrings = "^1.7.0"
-typer = ">=0.19.2"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.2"
-flake8 = "^7.1.1"
-black = "^24.8.0"
-ipykernel = "^6.29.5"
-
+# Build
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.9.3,<0.10.0"]
+build-backend = "uv_build"
+
+# Linting
+[tool.ruff]
+line-length = 99
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "build",
+    "dist",
+    "site-packages",
+    "venv",
+    "**/tests/*.py",
+    "integration_test.py"
+]
+
+indent-width = 4
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["B", "B9", "C", "E", "F", "S", "W"]
+ignore = ["E741"]
+
+fixable = ["ALL"]
+unfixable = []
+
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["E402", "F401"]
+"**/{tests,docs,tools}/*" = ["E402"]
+"**/test_*.py" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+# Testing
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: mark the test as an integration test.",
+    "ecs: mark test as ECS functionality test.",
+    "slow: mark test as slow (deselect with '-m \"not slow\"' option).",
+]
+
+
