@@ -5,6 +5,7 @@ import logging
 import sys
 import time
 import uuid
+from io import TextIOWrapper
 from datetime import datetime as dt
 from pathlib import Path
 from typing import List, Literal, Tuple
@@ -67,7 +68,7 @@ class UserImporter:  # noqa: R0902
         library_name: str,
         batch_size: int,
         limit_simultaneous_requests: asyncio.Semaphore,
-        user_file_path: Path = None,
+        user_file_path: Path | None = None,
         user_match_key: str = "externalSystemId",
         only_update_present_fields: bool = False,
         default_preferred_contact_type: str = "002",
@@ -78,7 +79,7 @@ class UserImporter:  # noqa: R0902
         self.batch_size = batch_size
         self.folio_client: folioclient.FolioClient = folio_client
         self.library_name: str = library_name
-        self.user_file_path: Path = user_file_path
+        self.user_file_path: Path | None = user_file_path
         self.patron_group_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/groups", "usergroups", "group"
         )
@@ -236,7 +237,7 @@ class UserImporter:  # noqa: R0902
             existing_pu = {}
         return existing_pu
 
-    async def map_address_types(self, user_obj, line_number) -> None:
+    async def map_address_types(self, user_obj, line_number: int) -> None:
         """
         Maps address type names in the user object to the corresponding ID in the address_type_map.
 
@@ -277,7 +278,7 @@ class UserImporter:  # noqa: R0902
             if mapped_addresses:
                 user_obj["personal"]["addresses"] = mapped_addresses
 
-    async def map_patron_groups(self, user_obj, line_number) -> None:
+    async def map_patron_groups(self, user_obj, line_number: int) -> None:
         """
         Maps the patron group of a user object using the provided patron group map.
 
@@ -307,7 +308,7 @@ class UserImporter:  # noqa: R0902
                 )
                 del user_obj["patronGroup"]
 
-    async def map_departments(self, user_obj, line_number) -> None:
+    async def map_departments(self, user_obj, line_number: int) -> None:
         """
         Maps the departments of a user object using the provided department map.
 
@@ -338,7 +339,7 @@ class UserImporter:  # noqa: R0902
 
     async def update_existing_user(
         self, user_obj, existing_user, protected_fields
-    ) -> Tuple[dict, dict]:
+    ) -> Tuple[dict, httpx.Response]:
         """
         Updates an existing user with the provided user object.
 
@@ -458,7 +459,7 @@ class UserImporter:  # noqa: R0902
             )
 
     async def create_or_update_user(
-        self, user_obj, existing_user, protected_fields, line_number
+        self, user_obj, existing_user, protected_fields, line_number: int
     ) -> dict:
         """
         Creates or updates a user based on the given user object and existing user.
@@ -549,7 +550,9 @@ class UserImporter:  # noqa: R0902
                     protected_fields[field] = val
         return protected_fields
 
-    async def process_existing_user(self, user_obj) -> Tuple[dict, dict, dict, dict]:
+    async def process_existing_user(
+        self, user_obj
+    ) -> Tuple[dict, dict, dict, dict, dict, dict, dict]:
         """
         Process an existing user.
 
@@ -558,8 +561,11 @@ class UserImporter:  # noqa: R0902
 
         Returns:
             tuple: A tuple containing the request preference object (rp_obj),
-                   the existing user object, the existing request preference object (existing_rp),
-                   and the existing PU object (existing_pu).
+                   the service points user object (spu_obj),
+                   the existing user object, the protected fields,
+                   the existing request preference object (existing_rp),
+                   the existing PU object (existing_pu),
+                   and the existing SPU object (existing_spu).
         """
         rp_obj = user_obj.pop("requestPreference", {})
         spu_obj = user_obj.pop("servicePointsUser", {})
@@ -857,7 +863,7 @@ class UserImporter:  # noqa: R0902
         )
         response.raise_for_status()
 
-    async def process_file(self, openfile) -> None:
+    async def process_file(self, openfile: TextIOWrapper) -> None:
         """
         Process the user object file.
 
@@ -936,7 +942,7 @@ class UserImporter:  # noqa: R0902
                     logger.info(message)
 
 
-def set_up_cli_logging():
+def set_up_cli_logging() -> None:
     """
     This function sets up logging for the CLI.
     """
@@ -1047,7 +1053,7 @@ def main(
     library_name = library_name
 
     # Semaphore to limit the number of async HTTP requests active at any given time
-    limit_async_requests = asyncio.Semaphore(limit_async_requests)
+    semaphore = asyncio.Semaphore(limit_async_requests)
     batch_size = batch_size
 
     gateway_url, tenant_id, username, password = get_folio_connection_parameters(
@@ -1059,7 +1065,11 @@ def main(
     if member_tenant_id:
         folio_client.tenant_id = member_tenant_id
 
-    user_file_path = user_file_path
+    if not library_name:
+        raise ValueError("library_name is required")
+    if not user_file_path:
+        raise ValueError("user_file_path is required")
+
     report_file_base_path = report_file_base_path or Path.cwd()
     error_file_path = (
         report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
@@ -1069,7 +1079,7 @@ def main(
             folio_client,
             library_name,
             batch_size,
-            limit_async_requests,
+            semaphore,
             user_file_path,
             user_match_key,
             update_only_present_fields,
