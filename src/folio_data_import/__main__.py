@@ -1,12 +1,9 @@
-import typer
+import cyclopts
 
-from folio_data_import.MARCDataImport import main as marc_app
-from folio_data_import.UserImport import main as users_main
+app = cyclopts.App(default_parameter=cyclopts.Parameter(negative=()))
 
-app = typer.Typer()
-
-app.command(name="marc")(marc_app)
-app.command(name="users")(users_main)
+app.command("folio_data_import.MARCDataImport:main", name="marc")
+app.command("folio_data_import.UserImport:main", name="users")
 
 if __name__ == "__main__":
     app()
