@@ -1001,7 +1001,9 @@ def main(
         str | None,
         cyclopts.Parameter(env_var="FOLIO_MEMBER_TENANT_ID", show_env_var=True),
     ] = None,
-    fields_to_protect: str | None = None,
+    fields_to_protect: Annotated[
+        str | None, cyclopts.Parameter(env_var="FOLIO_FIELDS_TO_PROTECT", show_env_var=True)
+    ] = None,
     update_only_present_fields: bool = False,
     limit_async_requests: Annotated[
         int,
