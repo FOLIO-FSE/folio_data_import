@@ -131,6 +131,9 @@ import-error.json
 snapshot-users*.json*
 import_complete/
 sample_mrc/
+sample_json/
+imp_docs/
 failed*.txt
 *.lock
 pylock.toml
+*_cache/

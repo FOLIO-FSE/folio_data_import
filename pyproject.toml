@@ -19,11 +19,14 @@ dependencies = [
     "flake8-docstrings>=1.7.0",
     "cyclopts>=4.2.0",
     "questionary>=2.1.1",
+    "folio-uuid>=1.0.0",
+    "pydantic>=2.12.3",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.2",
+    "pytest-asyncio>=0.24.0",
     "flake8>=7.1.1",
     "black>=24.8.0",
     "ipykernel>=6.29.5",
@@ -35,6 +38,7 @@ dev = [
 folio-data-import = "folio_data_import.__main__:app"
 folio-marc-import = "folio_data_import.MARCDataImport:app"
 folio-user-import = "folio_data_import.UserImport:app"
+folio-batch-poster = "folio_data_import.BatchPoster:app"
 
 # Build
 [build-system]
