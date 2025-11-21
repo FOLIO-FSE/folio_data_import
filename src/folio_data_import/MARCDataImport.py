@@ -13,7 +13,7 @@ from datetime import datetime as dt
 from functools import cached_property
 from pathlib import Path
 from time import sleep
-from typing import BinaryIO, Callable, Dict, Generator, List, cast
+from typing import Annotated, BinaryIO, Callable, Dict, Generator, List, cast
 
 import cyclopts
 import folioclient
@@ -22,6 +22,7 @@ import pymarc
 import questionary
 import tabulate
 from humps import decamelize
+from pydantic import BaseModel, Field
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -32,9 +33,8 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from typing import Annotated
 
-from folio_data_import import get_folio_connection_parameters
+from folio_data_import import get_folio_connection_parameters, __version__ as app_version
 from folio_data_import._progress import ItemsPerSecondColumn
 from folio_data_import.custom_exceptions import (
     FolioDataImportBatchError,
@@ -59,6 +59,17 @@ RETRY_TIMEOUT_MAX = 25.32
 # Custom log level for data issues, set to 26
 DATA_ISSUE_LVL_NUM = 26
 logging.addLevelName(DATA_ISSUE_LVL_NUM, "DATA_ISSUES")
+
+
+class MARCImportStats(BaseModel):
+    """Statistics for MARC import operations."""
+
+    records_sent: int = 0
+    records_processed: int = 0
+    created: int = 0
+    updated: int = 0
+    discarded: int = 0
+    error: int = 0
 
 
 class CustomLogger(logging.Logger):
@@ -90,7 +101,7 @@ class MARCImportJob:
         batch_size (int): The number of source records to include in a record batch (default=10).
         batch_delay (float): The number of seconds to wait between record batches (default=0).
         no_progress (bool): Disable progress bars (eg. for running in a CI environment).
-        marc_record_preprocessor (list or str): A list of callables or a string representing
+        marc_record_preprocessors (list or str): A list of callables or a string representing
             the MARC record preprocessor(s) to apply to each record before import.
         preprocessor_args (dict): A dictionary of arguments to pass to the MARC record preprocessor(s).
         let_summary_fail (bool): If True, will not retry or fail the import if the final job summary
@@ -101,6 +112,116 @@ class MARCImportJob:
         job_ids_file_path (str): The path to the file where job IDs will be saved (default="marc_import_job_ids.txt").
         show_file_names_in_data_import_logs (bool): If True, will set the file name for each job in the data import logs.
     """  # noqa: E501
+
+    class Config(BaseModel):
+        """Configuration for MARC import operations."""
+
+        marc_files: Annotated[
+            List[Path],
+            Field(
+                title="MARC files",
+                description="List of Path objects representing the MARC files to import",
+            ),
+        ]
+        import_profile_name: Annotated[
+            str,
+            Field(
+                title="Import profile name",
+                description="The name of the data import job profile to use",
+            ),
+        ]
+        batch_size: Annotated[
+            int,
+            Field(
+                title="Batch size",
+                description="Number of source records to include in a record batch",
+                ge=1,
+                le=1000,
+            ),
+        ] = 10
+        batch_delay: Annotated[
+            float,
+            Field(
+                title="Batch delay",
+                description="Number of seconds to wait between record batches",
+                ge=0.0,
+            ),
+        ] = 0.0
+        marc_record_preprocessors: Annotated[
+            List[Callable] | str | None,
+            Field(
+                title="MARC record preprocessor",
+                description=(
+                    "List of callables or string representing preprocessor(s) "
+                    "to apply to each record before import"
+                ),
+            ),
+        ] = None
+        preprocessors_args: Annotated[
+            Dict[str, Dict] | None,
+            Field(
+                title="Preprocessor arguments",
+                description="Dictionary of arguments to pass to the MARC record preprocessor(s)",
+            ),
+        ] = None
+        no_progress: Annotated[
+            bool,
+            Field(
+                title="No progress bars",
+                description="Disable progress bars (e.g., for CI environments)",
+            ),
+        ] = False
+        no_summary: Annotated[
+            bool,
+            Field(
+                title="No summary",
+                description="Skip the final job summary",
+            ),
+        ] = False
+        let_summary_fail: Annotated[
+            bool,
+            Field(
+                title="Let summary fail",
+                description="Do not retry or fail import if final job summary cannot be retrieved",
+            ),
+        ] = False
+        split_files: Annotated[
+            bool,
+            Field(
+                title="Split files",
+                description="Split each file into smaller jobs",
+            ),
+        ] = False
+        split_size: Annotated[
+            int,
+            Field(
+                title="Split size",
+                description="Number of records to include in each split file",
+                ge=1,
+            ),
+        ] = 1000
+        split_offset: Annotated[
+            int,
+            Field(
+                title="Split offset",
+                description="Number of split files to skip before starting processing",
+                ge=0,
+            ),
+        ] = 0
+        job_ids_file_path: Annotated[
+            Path | None,
+            Field(
+                title="Job IDs file path",
+                description="Path to file where job IDs will be saved",
+            ),
+        ] = None
+        show_file_names_in_data_import_logs: Annotated[
+            bool,
+            Field(
+                title="Show file names in DI logs",
+                description="Show file names in data import logs",
+            ),
+        ] = False
 
     bad_records_file: BinaryIO
     failed_batches_file: BinaryIO
@@ -125,40 +246,17 @@ class MARCImportJob:
     def __init__(
         self,
         folio_client: folioclient.FolioClient,
-        marc_files: List[Path],
-        import_profile_name: str,
-        batch_size: int = 10,
-        batch_delay: float = 0.0,
-        marc_record_preprocessor: List[Callable] | str | None = None,
-        preprocessor_args: Dict[str, Dict] | None = None,
-        no_progress: bool = False,
-        no_summary: bool = False,
-        let_summary_fail: bool = False,
-        split_files: bool = False,
-        split_size: int = 1000,
-        split_offset: int = 0,
-        job_ids_file_path: str | None = None,
-        show_file_names_in_data_import_logs: bool = False,
+        config: "MARCImportJob.Config",
     ) -> None:
-        self.split_files = split_files
-        self.split_size = split_size
-        self.split_offset = split_offset
-        self.no_progress = no_progress
-        self.no_summary = no_summary
-        self.let_summary_fail = let_summary_fail
         self.folio_client: folioclient.FolioClient = folio_client
-        self.import_files = marc_files
-        self.import_profile_name = import_profile_name
-        self.batch_size = batch_size
-        self.batch_delay = batch_delay
+        self.config = config
         self.current_retry_timeout: float | None = None
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
-            marc_record_preprocessor or "", **(preprocessor_args or {})
+            config.marc_record_preprocessors or "", **(config.preprocessors_args or {})
         )
-        self.job_ids_file_path = job_ids_file_path or self.import_files[0].parent.joinpath(
+        self.job_ids_file_path = config.job_ids_file_path or config.marc_files[0].parent.joinpath(
             "marc_import_job_ids.txt"
         )
-        self.show_file_names_in_data_import_logs = show_file_names_in_data_import_logs
 
     async def do_work(self) -> None:
         """
@@ -175,13 +273,13 @@ class MARCImportJob:
         with (
             self.folio_client.get_folio_http_client() as http_client,
             open(
-                self.import_files[0].parent.joinpath(
+                self.config.marc_files[0].parent.joinpath(
                     f"bad_marc_records_{dt.now(tz=datetime_utc).strftime('%Y%m%d%H%M%S')}.mrc"
                 ),
                 "wb+",
             ) as bad_marc_file,
             open(
-                self.import_files[0].parent.joinpath(
+                self.config.marc_files[0].parent.joinpath(
                     f"failed_batches_{dt.now(tz=datetime_utc).strftime('%Y%m%d%H%M%S')}.mrc"
                 ),
                 "wb+",
@@ -192,10 +290,10 @@ class MARCImportJob:
             self.failed_batches_file = failed_batches
             logger.info(f"Writing failed batches to {self.failed_batches_file.name}")
             self.http_client = http_client
-            if self.split_files:
+            if self.config.split_files:
                 await self.process_split_files()
             else:
-                for file in self.import_files:
+                for file in self.config.marc_files:
                     self.current_file = [file]
                     await self.import_marc_file()
 
@@ -205,17 +303,19 @@ class MARCImportJob:
         This method is called when `split_files` is set to True.
         It splits each file into smaller chunks and processes them one by one.
         """
-        for file in self.import_files:
+        for file in self.config.marc_files:
             with open(file, "rb") as f:
                 file_length = await self.read_total_records([f])
-            expected_batches = math.ceil(file_length / self.split_size)
+            expected_batches = math.ceil(file_length / self.config.split_size)
             logger.info(
                 f"{file.name} contains {file_length} records."
-                f" Splitting into {expected_batches} {self.split_size} record batches."
+                f" Splitting into {expected_batches} {self.config.split_size} record batches."
             )
             zero_pad_parts = len(str(expected_batches)) if expected_batches > 1 else 2
-            for idx, batch in enumerate(self.split_marc_file(file, self.split_size), start=1):
-                if idx > self.split_offset:
+            for idx, batch in enumerate(
+                self.split_marc_file(file, self.config.split_size), start=1
+            ):
+                if idx > self.config.split_offset:
                     batch.name = f"{file.name} (Part {idx:0{zero_pad_parts}})"
                     self.current_file = [batch]
                     await self.import_marc_file()
@@ -395,7 +495,7 @@ class MARCImportJob:
                 )
                 raise e
         self.job_id = create_job.json()["parentJobExecutionId"]
-        if self.show_file_names_in_data_import_logs:
+        if self.config.show_file_names_in_data_import_logs:
             await self.set_job_file_name()
         self.job_ids.append(self.job_id)
         logger.info(f"Created job: {self.job_id}")
@@ -414,7 +514,9 @@ class MARCImportJob:
             query_params={"limit": "1000"},
         )
         profile = [
-            profile for profile in import_profiles if profile["name"] == self.import_profile_name
+            profile
+            for profile in import_profiles
+            if profile["name"] == self.config.import_profile_name
         ][0]
         return profile
 
@@ -508,7 +610,7 @@ class MARCImportJob:
                     batch_payload["id"], f"{e}\n{e.response.text}", e
                 ) from e
         await self.get_job_status()
-        sleep(self.batch_delay)
+        sleep(self.config.batch_delay)
 
     async def process_records(self, files, total_records: int) -> None:
         """
@@ -531,7 +633,7 @@ class MARCImportJob:
             )
             reader = pymarc.MARCReader(import_file, hide_utf8_warnings=True)
             for idx, record in enumerate(reader, start=1):
-                if len(self.record_batch) == self.batch_size:
+                if len(self.record_batch) == self.config.batch_size:
                     await self.process_record_batch(
                         await self.create_batch_payload(
                             counter,
@@ -554,7 +656,7 @@ class MARCImportJob:
                     )
                     if reader.current_chunk:
                         self.bad_records_file.write(reader.current_chunk)
-            if not self.split_files:
+            if not self.config.split_files:
                 self.move_file_to_complete(file_path)
         if self.record_batch or not self.finished:
             await self.process_record_batch(
@@ -691,12 +793,12 @@ class MARCImportJob:
                 self.progress = import_progress
                 try:
                     self.pbar_sent = self.progress.add_task(
-                        "Sent: ", total=total_records, visible=not self.no_progress
+                        "Sent: ", total=total_records, visible=not self.config.no_progress
                     )
                     self.pbar_imported = self.progress.add_task(
                         f"Imported: ({self.job_hrid})",
                         total=total_records,
-                        visible=not self.no_progress,
+                        visible=not self.config.no_progress,
                     )
                     await self.process_records(files, total_records)
                     while not self.finished:
@@ -720,7 +822,7 @@ class MARCImportJob:
                             f" cancelling and exiting (maximum retries reached)."
                         )
                         raise e
-            if self.finished and not self.no_summary:
+            if self.finished and not self.config.no_summary:
                 await asyncio.sleep(5)
                 await self.log_job_summary()
             elif self.finished:
@@ -804,7 +906,7 @@ class MARCImportJob:
             if (self._max_summary_retries > self._summary_retries) and (
                 not hasattr(e, "response")
                 or (hasattr(e, "response") and e.response.status_code in [502, 504])
-                and not self.let_summary_fail
+                and not self.config.let_summary_fail
             ):
                 logger.warning(f"SERVER ERROR fetching job summary: {e}. Retrying.")
                 sleep(0.25)
@@ -815,7 +917,7 @@ class MARCImportJob:
                     return await self.get_job_summary()
             elif (self._summary_retries >= self._max_summary_retries) or (
                 hasattr(e, "response")
-                and (e.response.status_code in [502, 504] and self.let_summary_fail)
+                and (e.response.status_code in [502, 504] and self.config.let_summary_fail)
             ):
                 logger.warning(
                     f"SERVER ERROR fetching job summary: {error_text}."
@@ -875,86 +977,123 @@ def set_up_cli_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-app = cyclopts.App()
+app = cyclopts.App(version=app_version)
 
 
 @app.default
 def main(
+    config_file: Annotated[
+        Path | None, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = None,
     *,
     gateway_url: Annotated[
         str | None,
         cyclopts.Parameter(
-            env_var="FOLIO_GATEWAY_URL",
+            env_var=["FOLIO_GATEWAY_URL"],
             show_env_var=True,
+            group="FOLIO Connection Parameters",
         ),
     ] = None,
     tenant_id: Annotated[
         str | None,
         cyclopts.Parameter(
-            env_var="FOLIO_TENANT_ID",
+            env_var=["FOLIO_TENANT_ID"],
             show_env_var=True,
+            group="FOLIO Connection Parameters",
         ),
     ] = None,
     username: Annotated[
         str | None,
         cyclopts.Parameter(
-            env_var="FOLIO_USERNAME",
+            env_var=["FOLIO_USERNAME"],
             show_env_var=True,
+            group="FOLIO Connection Parameters",
         ),
     ] = None,
     password: Annotated[
         str | None,
         cyclopts.Parameter(
-            env_var="FOLIO_PASSWORD",
+            env_var=["FOLIO_PASSWORD"],
             show_env_var=True,
+            group="FOLIO Connection Parameters",
         ),
     ] = None,
-    marc_file_path: str | None = None,
+    marc_file_paths: Annotated[
+        List[Path] | None,
+        cyclopts.Parameter(
+            consume_multiple=True,
+            name=["--marc-file-paths", "--marc-file-path"],
+            help="Path(s) to MARC file(s). Accepts multiple values and glob patterns.",
+            group="Job Configuration Parameters",
+        ),
+    ] = None,
     member_tenant_id: Annotated[
         str | None,
         cyclopts.Parameter(
             env_var="FOLIO_MEMBER_TENANT_ID",
             show_env_var=True,
+            group="FOLIO Connection Parameters",
         ),
     ] = None,
-    import_profile_name: str | None = None,
-    batch_size: int = 10,
-    batch_delay: float = 0.0,
-    preprocessor: str | None = None,
-    file_names_in_di_logs: bool = False,
-    split_files: bool = False,
-    split_size: int = 1000,
-    split_offset: int = 0,
-    no_progress: bool = False,
-    no_summary: bool = False,
-    let_summary_fail: bool = False,
-    preprocessor_config: str | None = None,
-    job_ids_file_path: str | None = None,
+    import_profile_name: Annotated[
+        str | None, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = None,
+    batch_size: Annotated[int, cyclopts.Parameter(group="Job Configuration Parameters")] = 10,
+    batch_delay: Annotated[float, cyclopts.Parameter(group="Job Configuration Parameters")] = 0.0,
+    preprocessors: Annotated[
+        str | None,
+        cyclopts.Parameter(
+            name=["--preprocessor", "--preprocessors"], group="Job Configuration Parameters"
+        ),
+    ] = None,
+    preprocessors_config: Annotated[
+        str | None,
+        cyclopts.Parameter(
+            name=["--preprocessor-config", "--preprocessors-config"],
+            group="Job Configuration Parameters",
+        ),
+    ] = None,
+    file_names_in_di_logs: Annotated[
+        bool, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = False,
+    split_files: Annotated[bool, cyclopts.Parameter(group="Job Configuration Parameters")] = False,
+    split_size: Annotated[int, cyclopts.Parameter(group="Job Configuration Parameters")] = 1000,
+    split_offset: Annotated[int, cyclopts.Parameter(group="Job Configuration Parameters")] = 0,
+    no_progress: Annotated[bool, cyclopts.Parameter(group="Job Configuration Parameters")] = False,
+    no_summary: Annotated[bool, cyclopts.Parameter(group="Job Configuration Parameters")] = False,
+    let_summary_fail: Annotated[
+        bool, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = False,
+    job_ids_file_path: Annotated[
+        str | None, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = None,
 ) -> None:
     """
     Command-line interface to batch import MARC records into FOLIO using FOLIO Data Import
 
     Parameters:
-        gateway_url (str): The FOLIO API Gateway URL
-        tenant_id (str): The tenant id
-        username (str): The FOLIO username
-        password (str): The FOLIO password
-        marc_file_path (str): The MARC file (or file glob) to import
-        member_tenant_id (str): The FOLIO ECS member tenant id (if applicable)
-        import_profile_name (str): The name of the import profile to use
-        batch_size (int): The number of records to send in each batch
-        batch_delay (float): The delay (in seconds) between sending each batch
-        preprocessor (str): The MARC record preprocessor to use
-        file_names_in_di_logs (bool): Show file names in data import logs
-        split_files (bool): Split files into smaller batches
-        split_size (int): The number of records per split batch
-        split_offset (int): The number of split batches to skip before starting import
-        no_progress (bool): Disable progress bars
-        no_summary (bool): Skip the final job summary
-        let_summary_fail (bool): Let the final summary check fail without exiting
-        preprocessor_config (str): Path to JSON config file for the preprocessor
-        job_ids_file_path (str): Path to file to write job IDs to
-    """
+        config_file (Path | None): Path to JSON config file for the import job, overrides other parameters if provided.
+        gateway_url (str): The FOLIO API Gateway URL.
+        tenant_id (str): The tenant id.
+        username (str): The FOLIO username.
+        password (str): The FOLIO password.
+        marc_file_paths (List[Path]): The MARC file(s) or glob pattern(s) to import.
+        member_tenant_id (str): The FOLIO ECS member tenant id (if applicable).
+        import_profile_name (str): The name of the import profile to use.
+        batch_size (int): The number of records to send in each batch.
+        batch_delay (float): The delay (in seconds) between sending each batch.
+        preprocessors (str): Comma-separated list of MARC record preprocessors to use.
+        preprocessors_config (str): Path to JSON config file for the preprocessors.
+        file_names_in_di_logs (bool): Show file names in data import logs.
+        split_files (bool): Split files into smaller batches.
+        split_size (int): The number of records per split batch.
+        split_offset (int): The number of split batches to skip before starting import.
+        no_progress (bool): Disable progress bars.
+        no_summary (bool): Skip the final job summary.
+        let_summary_fail (bool): Let the final summary check fail without exiting.
+        preprocessor_config (str): Path to JSON config file for the preprocessor.
+        job_ids_file_path (str): Path to file to write job IDs to.
+    """  # noqa: E501
     set_up_cli_logging()
     gateway_url, tenant_id, username, password = get_folio_connection_parameters(
         gateway_url, tenant_id, username, password
@@ -964,76 +1103,96 @@ def main(
     if member_tenant_id:
         folio_client.tenant_id = member_tenant_id
 
-    if marc_file_path and os.path.isabs(marc_file_path):
-        marc_files = [Path(x) for x in glob.glob(marc_file_path)]
-    elif marc_file_path:
-        marc_files = list(Path("./").glob(marc_file_path))
-    else:
-        marc_files = []
+    # Handle file path expansion
+    marc_files = collect_marc_file_paths(marc_file_paths)
 
     marc_files.sort()
 
     if len(marc_files) == 0:
-        logger.critical(f"No files found matching {marc_file_path}. Exiting.")
+        logger.critical(f"No files found matching {marc_file_paths}. Exiting.")
         sys.exit(1)
     else:
         logger.info(marc_files)
 
-    if preprocessor_config:
-        with open(preprocessor_config, "r") as f:
+    if preprocessors_config:
+        with open(preprocessors_config, "r") as f:
             preprocessor_args = json.load(f)
     else:
         preprocessor_args = {}
 
     if not import_profile_name:
-        try:
-            import_profiles = folio_client.folio_get(
-                "/data-import-profiles/jobProfiles",
-                "jobProfiles",
-                query_params={"limit": "1000"},
-            )
-            import_profile_names = [
-                profile["name"]
-                for profile in import_profiles
-                if "marc" in profile["dataType"].lower()
-            ]
-            import_profile_name = questionary.select(
-                "Select an import profile:",
-                choices=import_profile_names,
-            ).ask()
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"HTTP Error fetching import profiles: {e}"
-                f"\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
-            )
-            sys.exit(1)
-        except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received. Exiting.")
-            sys.exit(0)
+        import_profile_name = select_import_profile(folio_client)
 
     job = None
     try:
-        job = MARCImportJob(
-            folio_client,
-            marc_files,
-            import_profile_name,
-            batch_size=batch_size,
-            batch_delay=batch_delay,
-            marc_record_preprocessor=preprocessor,
-            preprocessor_args=preprocessor_args,
-            no_progress=no_progress,
-            no_summary=no_summary,
-            let_summary_fail=let_summary_fail,
-            split_files=split_files,
-            split_size=split_size,
-            split_offset=split_offset,
-            job_ids_file_path=job_ids_file_path,
-            show_file_names_in_data_import_logs=file_names_in_di_logs,
-        )
+        if config_file:
+            with open(config_file, "r") as f:
+                config_data = json.load(f)
+            config = MARCImportJob.Config(**config_data)
+        else:
+            config = MARCImportJob.Config(
+                marc_files=marc_files,
+                import_profile_name=import_profile_name,
+                batch_size=batch_size,
+                batch_delay=batch_delay,
+                marc_record_preprocessors=preprocessors,
+                preprocessor_args=preprocessor_args,
+                no_progress=no_progress,
+                no_summary=no_summary,
+                let_summary_fail=let_summary_fail,
+                split_files=split_files,
+                split_size=split_size,
+                split_offset=split_offset,
+                job_ids_file_path=Path(job_ids_file_path) if job_ids_file_path else None,
+                show_file_names_in_data_import_logs=file_names_in_di_logs,
+            )
+        job = MARCImportJob(folio_client, config)
         asyncio.run(run_job(job))
     except Exception as e:
         logger.error("Could not initialize MARCImportJob: " + str(e))
         sys.exit(1)
+
+
+def select_import_profile(folio_client):
+    try:
+        import_profiles = folio_client.folio_get(
+            "/data-import-profiles/jobProfiles",
+            "jobProfiles",
+            query_params={"limit": "1000"},
+        )
+        import_profile_names = [
+            profile["name"] for profile in import_profiles if "marc" in profile["dataType"].lower()
+        ]
+        import_profile_name = questionary.select(
+            "Select an import profile:",
+            choices=import_profile_names,
+        ).ask()
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"HTTP Error fetching import profiles: {e}"
+            f"\n{getattr(getattr(e, 'response', ''), 'text', '')}\nExiting."
+        )
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received. Exiting.")
+        sys.exit(0)
+    return import_profile_name
+
+
+def collect_marc_file_paths(marc_file_paths):
+    marc_files: List[Path] = []
+    if marc_file_paths:
+        for file_path in marc_file_paths:
+            # Check if the path contains glob patterns
+            file_path_str = str(file_path)
+            if any(char in file_path_str for char in ["*", "?", "["]):
+                # It's a glob pattern - expand it
+                expanded = glob.glob(file_path_str)
+                marc_files.extend([Path(x) for x in expanded])
+            else:
+                # It's a regular path
+                marc_files.append(file_path)
+    return marc_files
 
 
 async def run_job(job: MARCImportJob):
