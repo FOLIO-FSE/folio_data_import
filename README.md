@@ -8,6 +8,7 @@ This project is designed to import data into the FOLIO LSP. It provides a simple
 
 - Import MARC records using FOLIO's Data Import system
 - Import User records using FOLIO's User APIs
+- Batch post Instances, Holdings, and Items to FOLIO inventory storage
 
 ## Installation
 
@@ -34,31 +35,68 @@ Make sure to activate the virtual environment created by `uv` before running the
 
 ## Usage
 
-1. Prepare the data to be imported in the specified format.
-2. Run the application and follow the prompts to import the data.
-3. Monitor the import progress and handle any errors or conflicts that may arise.
+This package provides CLI commands for importing data into FOLIO:
 
-### folio-data-import
-This command provides access to subcommands for importing user and marc data. To import users:
 ```shell
-folio-data-import users --help
-```
-(for more information, see [folio-user-import](#folio-user-import), below)
+# Main command with subcommands
+folio-data-import <subcommand> [options]
 
-For MARC data:
-```shell
-folio-data-import marc --help
+# Or use standalone commands
+folio-user-import [options]
+folio-marc-import [options]
+folio-batch-poster [options]
 ```
-(for more information, see [folio-marc-import](#folio-marc-import), below)
 
-As an added convenience, this script can also install tab-completions for itself in your shell:
+**Tab Completion:** Install shell completions for better CLI experience:
 ```shell
 folio-data-import --install-completion
 ```
-Once installed, you can `[tab][tab]` after typing `--` and be presented with a list of availabl command options.
 
-### folio-user-import
-When this package is installed via PyPI or using `poetry install` from this repository, it installs a convenience script in your `$PATH` called `folio-user-import`. To view all command line options for this script, run `folio-user-import --help`. In addition to supporting `mod-user-import`-style JSON objects, this script also allows you to manage service point assignments for users by specifying a `servicePointsUser` object in the JSON object, using service point codes in place of UUIDs in the `defaultServicePointId` and `servicePointIds` fields:
+### Environment Variables
+
+All commands support environment variables for FOLIO connection credentials, allowing you to avoid repeating these parameters:
+
+```shell
+export FOLIO_GATEWAY_URL="https://folio-snapshot-okapi.dev.folio.org"
+export FOLIO_TENANT_ID="diku"
+export FOLIO_USERNAME="diku_admin"
+export FOLIO_PASSWORD="admin"
+```
+
+Once set, you can omit these parameters from your commands:
+
+```shell
+# Instead of:
+folio-data-import users --gateway-url "..." --tenant-id "..." --username "..." --password "..." --user-file users.jsonl
+
+# You can simply use:
+folio-data-import users --user-file users.jsonl
+```
+
+This works for all subcommands: `users`, `marc`, and `batch-poster`.
+
+## CLI Commands
+
+### folio-data-import users
+
+**Alias:** `folio-user-import`
+
+Import users to FOLIO with extended functionality beyond `mod-user-import`.
+
+#### Quick Start
+
+```shell
+folio-data-import users \
+  --gateway-url "https://folio-snapshot-okapi.dev.folio.org" \
+  --tenant-id diku \
+  --username diku_admin \
+  --password admin \
+  --user-file users.jsonl
+```
+
+#### Features
+
+**Service Point Management:** Specify service points using codes instead of UUIDs:
 ```
 {
     "username": "checkin-all",
@@ -100,54 +138,299 @@ When this package is installed via PyPI or using `poetry install` from this repo
     }
 }
 ```
-#### Matching Existing Users
 
-Unlike mod-user-import, this importer does not require `externalSystemId` as the match point for your objects. If the user objects have `id` values, that will be used, falling back to `externalSystemId`. However, you can also specify `username` or `barcode` as the match point if desired, using the `--user_match_key` argument.
-
-#### Preferred Contact Type Mapping
-
-Another point of departure from the behavior of `mod-user-import` is the handling of `preferredContactTypeId`. This importer will accept either the `"001", "002", "003"...` values stored by FOLIO, or the human-friendly strings used by `mod-user-import` (`"mail", "email", "text", "phone", "mobile"`). It will also __*set a customizable default for all users that do not otherwise have a valid value specified*__ (using `--default_preferred_contact_type`), unless a (valid) value is already present in the user record being updated.
-
-#### Per-record Field Protection (*experimental*)
-
-This script offers a rudimentary field protection implementation using custom fields. To enable this functionality, create a text custom field that has the field name `protectedFields`. In this field, you can specify a comma-separated list of User schema field names, using dot-notation for nested fields. This protection should support all standard fields except addresses within `personal.addresses`. If you include `personal.addresses` in a user record, any existing addresses will be replaced by the new values.
-
-##### Example
-
-```
-{
-    "protectedFields": "customFields.protectedFields,personal.preferredFirstName,barcode,personal.telephone,personal.addresses"
-}
+**Flexible Matching:** Match users by `id`, `externalSystemId`, `username`, or `barcode`:
+```shell
+folio-data-import users --user-file users.jsonl --user-match-key username
 ```
 
-Would result in `preferredFirstName`, `barcode`, and `telephone` remaining unchanged, regardless of the contents of the incoming records.
-
-#### Job-level field protection
-
-To protect fields for all records in a particular import job, you can pass a list of field paths with the `--fields-to-protect` flag. These protections will be applied in combination with any record-level protections specified.
-
-##### Example
-```Shell
-folio-user-import ... --fields-to-protect "personal.preferredFirstName,customFields.exampleCustomField"
+**Preferred Contact Type:** Accepts FOLIO IDs or human-friendly strings (`mail`, `email`, `text`, `phone`, `mobile`). Set a default for users without a valid value:
+```shell
+folio-data-import users --user-file users.jsonl --default-preferred-contact-type email
 ```
 
-#### How to use:
-1. Generate a JSON lines (one JSON object per line) file of FOLIO user objects in the style of [mod-user-import](https://github.com/folio-org/mod-user-import)
-2. Run the script and specify the required arguments (and any desired optional arguments), including the path to your file of user objects
-3. Watch the pretty progress bars...
+**Field Protection:** Protect specific fields from being updated:
 
-### folio-marc-import
-`folio-marc-import` provides direct access to the MARC import functionality of FOLIO. It can be used to import any file (or files) of binary MARC records via FOLIO's Data Import system using the [change-manager](https://github.com/folio-org/mod-source-record-manager?tab=readme-ov-file#data-import-workflow) APIs directly.
+- **Job-level protection** (applies to all records):
+  ```shell
+  folio-data-import users --user-file users.jsonl \
+    --fields-to-protect "personal.preferredFirstName,barcode"
+  ```
 
-#### How to use:
-1. Have a binary MARC21 file (or directory of files)
-2. Have a [Data Import Job Profile](https://docs.folio.org/docs/metadata/additional-topics/jobprofiles/) that you want to use to import your records already set up in FOLIO
-3. Run the script and specify the required arguments. (`folio-marc-import --help` for more details)
-4. Select the job profile you want to use
-5. Watch the pretty progress bars...
+- **Per-record protection** (using custom field `protectedFields`):
+  ```json
+  {
+    "username": "jdoe",
+    "customFields": {
+      "protectedFields": "barcode,personal.telephone,personal.addresses"
+    }
+  }
+  ```
 
-#### A note on logging
-The import logs and job summaries provided by FOLIO can be unreliable in certain circumstances. The scripts have been written to balance the need to retrieve job summary information at the end of each job with the the need to move on to the next import job. If you don't see a job summary when your job completes, check Data Import in FOLIO (Data Import > Actions > View all logs...)
+#### Input Format
+
+JSON Lines format - one user object in the style<sup>*</sup> of [mod-user-import](https://github.com/folio-org/mod-user-import) (with extended support mentioned above) per line
+
+<sup>*</sup>also supports dereferenced (UUIDs instead of reference strings) user objects (eg. directly extracted from `/users`)
+
+### folio-data-import marc
+
+**Alias:** `folio-marc-import`
+
+Import binary MARC21 records via FOLIO's Data Import system using the [change-manager](https://github.com/folio-org/mod-source-record-manager?tab=readme-ov-file#data-import-workflow) APIs.
+
+#### Quick Start
+
+```shell
+folio-data-import marc \
+  --gateway-url "https://folio-snapshot-okapi.dev.folio.org" \
+  --tenant-id diku \
+  --username diku_admin \
+  --password admin \
+  --marc-source-path records.mrc
+```
+
+The command will prompt you to select a [Data Import Job Profile](https://docs.folio.org/docs/metadata/additional-topics/jobprofiles/) configured in your FOLIO tenant.
+
+#### Features
+
+- Process single files or entire directories of MARC files
+- Interactive job profile selection
+- Real-time progress tracking
+- Automatic retry on transient errors
+
+**Note:** FOLIO's import logs can be unreliable. If you don't see a job summary when your job completes, check Data Import in FOLIO (Data Import > Actions > View all logs...).
+
+### folio-data-import batch-poster
+
+**Alias:** `folio-batch-poster`
+
+Efficiently batch post Instances, Holdings, and Items to FOLIO's inventory storage endpoints with support for creating new records and updating existing ones.
+
+#### Quick Start
+
+```shell
+folio-data-import batch-poster \
+  --gateway-url "https://folio-snapshot-okapi.dev.folio.org" \
+  --tenant-id diku \
+  --username diku_admin \
+  --password admin \
+  --object-type Items \
+  --file-paths items.jsonl \
+  --batch-size 100 \
+  --upsert
+```
+
+#### Key Features
+
+- **Multiple File Support**: Process multiple files with glob patterns
+  ```shell
+  folio-data-import batch-poster --object-type Items --file-paths "items_*.jsonl"
+  ```
+
+- **Upsert Mode**: Create new records or update existing ones
+  ```shell
+  folio-data-import batch-poster --object-type Items --file-paths items.jsonl --upsert
+  ```
+
+- **Field Preservation**: Control which fields are preserved during updates
+  ```shell
+  folio-data-import batch-poster --object-type Items --file-paths items.jsonl --upsert \
+    --preserve-statistical-codes \
+    --preserve-administrative-notes \
+    --preserve-temporary-locations \
+    --overwrite-item-status
+  ```
+
+- **Selective Patching**: Update only specific fields
+  ```shell
+  folio-data-import batch-poster --object-type Items --file-paths items.jsonl --upsert \
+    --patch-existing-records \
+    --patch-paths "barcode,status,itemLevelCallNumber"
+  ```
+
+- **Failed Records**: Automatically save failed records to a file
+  ```shell
+  folio-data-import batch-poster --object-type Items --file-paths items.jsonl \
+    --failed-records-file failed_items.jsonl
+  ```
+
+- **Progress Tracking**: Real-time progress bar with statistics
+  - Disable with `--no-progress` for CI/CD environments
+
+- **Config File Support**: Use a JSON config file for complex configurations
+  ```shell
+  folio-data-import batch-poster config.json
+  ```
+  
+  Example `config.json`:
+  ```json
+  {
+    "object_type": "Items",
+    "file_paths": ["items1.jsonl", "items2.jsonl"],
+    "batch_size": 100,
+    "upsert": true,
+    "preserve_statistical_codes": true,
+    "preserve_item_status": true,
+    "failed_records_file": "failed_items.jsonl"
+  }
+  ```
+
+#### Input Format
+
+Input files should be JSONL (JSON Lines) format - one complete JSON object per line:
+
+```jsonl
+{"id": "item-001", "barcode": "12345", "status": {"name": "Available"}}
+{"id": "item-002", "barcode": "12346", "status": {"name": "Available"}}
+{"id": "item-003", "barcode": "12347", "status": {"name": "Checked out"}}
+```
+
+#### Common Use Cases
+
+**Create new items:**
+```shell
+folio-data-import batch-poster --object-type Items --file-paths new_items.jsonl
+```
+
+**Update existing items (by ID):**
+```shell
+folio-data-import batch-poster --object-type Items --file-paths items.jsonl --upsert
+```
+
+**Update only barcodes and call numbers:**
+```shell
+folio-data-import batch-poster --object-type Items --file-paths items.jsonl --upsert \
+  --patch-existing-records \
+  --patch-paths "barcode,itemLevelCallNumber"
+```
+
+**Process multiple files:**
+```shell
+folio-data-import batch-poster --object-type Holdings \
+  --file-paths holdings_*.jsonl \
+  --batch-size 500 \
+  --upsert
+```
+
+#### Available Options
+
+Run `folio-data-import batch-poster --help` to see all available options:
+- `--object-type`: Type of inventory object (Items, Holdings, or Instances) - **Required**
+- `--file-paths`: Path(s) to JSONL file(s) - supports glob patterns - **Required**
+- `--batch-size`: Number of records per batch (1-1000, default: 100)
+- `--upsert`: Enable create-or-update mode
+- `--preserve-statistical-codes`: Keep existing statistical codes during updates
+- `--preserve-administrative-notes`: Keep existing administrative notes
+- `--preserve-temporary-locations`: Keep temporary location (Items only)
+- `--preserve-temporary-loan-types`: Keep temporary loan type (Items only)
+- `--preserve-item-status`: Keep item status (Items only, default: true)
+- `--patch-existing-records`: Enable selective field patching
+- `--patch-paths`: Comma-separated list of fields to patch
+- `--failed-records-file`: Path to save failed records
+- `--no-progress`: Disable progress bar (useful for CI/CD)
+
+## Programmatic Usage
+
+All CLI commands can also be used programmatically in your Python applications.
+
+### BatchPoster
+
+```python
+import asyncio
+from folioclient import FolioClient
+from folio_data_import.BatchPoster import BatchPoster
+
+async def post_items():
+    # Create FOLIO client
+    folio = FolioClient(
+        okapi_url="https://folio-snapshot-okapi.dev.folio.org",
+        tenant_id="diku",
+        username="diku_admin",
+        password="admin"
+    )
+    
+    # Configure batch poster
+    config = BatchPoster.Config(
+        object_type="Items",
+        batch_size=100,
+        upsert=True,
+        preserve_statistical_codes=True
+    )
+    
+    # Post records
+    async with BatchPoster(
+        folio, 
+        config,
+        failed_records_file="failed_items.jsonl"
+    ) as poster:
+        await poster.post_records("items.jsonl")
+        print(f"Posted: {poster.stats.records_posted}, Failed: {poster.stats.records_failed}")
+
+asyncio.run(post_items())
+```
+
+### UserImporter
+
+```python
+import asyncio
+from folioclient import FolioClient
+from folio_data_import.UserImport import UserImporter
+
+async def import_users():
+    folio = FolioClient(
+        okapi_url="https://folio-snapshot-okapi.dev.folio.org",
+        tenant_id="diku",
+        username="diku_admin",
+        password="admin"
+    )
+    
+    config = UserImporter.Config(
+        user_file="users.jsonl",
+        user_match_key="username",
+        default_preferred_contact_type="email"
+    )
+    
+    importer = UserImporter(folio, config)
+    result = await importer.do_work()
+    print(f"Imported {result.records_created} users")
+
+asyncio.run(import_users())
+```
+
+### MARCImportJob
+
+```python
+import asyncio
+from folioclient import FolioClient
+from folio_data_import.MARCDataImport import MARCImportJob
+
+async def import_marc():
+    folio = FolioClient(
+        okapi_url="https://folio-snapshot-okapi.dev.folio.org",
+        tenant_id="diku",
+        username="diku_admin",
+        password="admin"
+    )
+    
+    config = MARCImportJob.Config(
+        marc_source_path="records.mrc",
+        job_profile_id="profile-uuid",
+        job_profile_name="Bibliographic records"
+    )
+    
+    job = MARCImportJob(folio, config)
+    result = await job.start_import()
+    print(f"Imported {result.created_records} MARC records")
+
+asyncio.run(import_marc())
+```
+
+### Additional Documentation
+
+For complete API documentation and advanced usage:
+- [BatchPoster.md](docs/BatchPoster.md) - Comprehensive BatchPoster guide
+- [BatchPoster_Quick_Reference.md](docs/BatchPoster_Quick_Reference.md) - Quick reference
 
 ## Contributing
 
