@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import glob
 import json
 import logging
 import sys
@@ -8,13 +9,14 @@ import uuid
 from io import TextIOWrapper
 from datetime import datetime as dt
 from pathlib import Path
-from typing import List, Literal, Tuple
+from typing import List, Literal, Tuple, Annotated
 
 import aiofiles
 import cyclopts
 import folioclient
 import httpx
 from aiofiles.threadpool.text import AsyncTextIOWrapper
+from pydantic import BaseModel, Field
 from rich.logging import RichHandler
 from rich.progress import (
     BarColumn,
@@ -24,7 +26,6 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from typing import Annotated
 
 from folio_data_import import get_folio_connection_parameters
 from folio_data_import._progress import ItemsPerSecondColumn, UserStatsColumn
@@ -51,12 +52,102 @@ PREFERRED_CONTACT_TYPES_MAP = {
 USER_MATCH_KEYS = ["username", "barcode", "externalSystemId"]
 
 
+class UserImporterStats(BaseModel):
+    """Statistics for user import operations."""
+
+    created: int = 0
+    updated: int = 0
+    failed: int = 0
+
+
 class UserImporter:  # noqa: R0902
     """
     Class to import mod-user-import compatible user objects
     (eg. from folio_migration_tools UserTransformer task)
     from a JSON-lines file into FOLIO
     """
+
+    class Config(BaseModel):
+        """Configuration for UserImporter operations."""
+
+        library_name: Annotated[
+            str,
+            Field(
+                title="Library name",
+                description="The library name associated with the import job",
+            ),
+        ]
+        batch_size: Annotated[
+            int,
+            Field(
+                title="Batch size",
+                description="Number of users to process in each batch",
+                ge=1,
+                le=1000,
+            ),
+        ] = 250
+        user_match_key: Annotated[
+            Literal["externalSystemId", "username", "barcode"],
+            Field(
+                title="User match key",
+                description="The key to use for matching existing users",
+            ),
+        ] = "externalSystemId"
+        only_update_present_fields: Annotated[
+            bool,
+            Field(
+                title="Only update present fields",
+                description=(
+                    "When enabled, only fields present in the input will be updated. "
+                    "Missing fields will be left unchanged in existing records."
+                ),
+            ),
+        ] = False
+        default_preferred_contact_type: Annotated[
+            Literal["001", "002", "003", "004", "005", "mail", "email", "text", "phone", "mobile"],
+            Field(
+                title="Default preferred contact type",
+                description=(
+                    "Default preferred contact type for users. "
+                    "Can be specified as ID (001-005) or name (mail/email/text/phone/mobile). "
+                    "Will be applied to users without a valid value already set."
+                ),
+            ),
+        ] = "002"
+        fields_to_protect: Annotated[
+            List[str],
+            Field(
+                title="Fields to protect",
+                description=(
+                    "List of field paths to protect from updates "
+                    "(e.g., ['personal.email', 'barcode']). "
+                    "Protected fields will not be modified during updates."
+                ),
+            ),
+        ] = []
+        limit_simultaneous_requests: Annotated[
+            int,
+            Field(
+                title="Limit simultaneous requests",
+                description="Maximum number of concurrent async HTTP requests",
+                ge=1,
+                le=100,
+            ),
+        ] = 10
+        user_file_paths: Annotated[
+            Path | List[Path] | None,
+            Field(
+                title="User file paths",
+                description="Path or list of paths to JSON-lines file(s) containing user data",
+            ),
+        ] = None
+        no_progress: Annotated[
+            bool,
+            Field(
+                title="No progress bar",
+                description="Disable the progress bar display",
+            ),
+        ] = False
 
     logfile: AsyncTextIOWrapper
     errorfile: AsyncTextIOWrapper
@@ -65,21 +156,12 @@ class UserImporter:  # noqa: R0902
     def __init__(
         self,
         folio_client: folioclient.FolioClient,
-        library_name: str,
-        batch_size: int,
-        limit_simultaneous_requests: asyncio.Semaphore,
-        user_file_path: Path | None = None,
-        user_match_key: str = "externalSystemId",
-        only_update_present_fields: bool = False,
-        default_preferred_contact_type: str = "002",
-        fields_to_protect: List[str] | None = None,
-        no_progress: bool = False,
+        config: "UserImporter.Config",
     ) -> None:
-        self.limit_simultaneous_requests = limit_simultaneous_requests
-        self.batch_size = batch_size
+        self.config = config
         self.folio_client: folioclient.FolioClient = folio_client
-        self.library_name: str = library_name
-        self.user_file_path: Path | None = user_file_path
+        self.limit_simultaneous_requests = asyncio.Semaphore(config.limit_simultaneous_requests)
+        # Build reference data maps (these need processing)
         self.patron_group_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/groups", "usergroups", "group"
         )
@@ -92,13 +174,10 @@ class UserImporter:  # noqa: R0902
         self.service_point_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/service-points", "servicepoints", "code"
         )
-        self.only_update_present_fields: bool = only_update_present_fields
-        self.default_preferred_contact_type: str = default_preferred_contact_type
-        self.match_key = user_match_key
+        # Convert fields_to_protect to a set to dedupe
+        self.fields_to_protect = set(config.fields_to_protect)
         self.lock: asyncio.Lock = asyncio.Lock()
-        self.logs: dict = {"created": 0, "updated": 0, "failed": 0}
-        self.fields_to_protect = set(fields_to_protect) if fields_to_protect else set()
-        self.no_progress = no_progress
+        self.stats = UserImporterStats()
 
     @staticmethod
     def build_ref_data_id_map(
@@ -156,14 +235,26 @@ class UserImporter:  # noqa: R0902
         Main method to import users.
 
         This method triggers the process of importing users by calling the `process_file` method.
+        Supports both single file path and list of file paths.
         """
         async with httpx.AsyncClient() as client:
             self.http_client = client
-            if self.user_file_path:
-                with open(self.user_file_path, "r", encoding="utf-8") as openfile:
-                    await self.process_file(openfile)
-            else:
+            if not self.config.user_file_paths:
                 raise FileNotFoundError("No user objects file provided")
+
+            # Normalize to list of paths
+            file_paths = (
+                [self.config.user_file_paths]
+                if isinstance(self.config.user_file_paths, Path)
+                else self.config.user_file_paths
+            )
+
+            # Process each file
+            for idx, file_path in enumerate(file_paths, start=1):
+                if len(file_paths) > 1:
+                    logger.info(f"Processing file {idx} of {len(file_paths)}: {file_path.name}")
+                with open(file_path, "r", encoding="utf-8") as openfile:
+                    await self.process_file(openfile)
 
     async def get_existing_user(self, user_obj) -> dict:
         """
@@ -175,7 +266,7 @@ class UserImporter:  # noqa: R0902
         Returns:
             The existing user object if found, otherwise an empty dictionary.
         """
-        match_key = "id" if ("id" in user_obj) else self.match_key
+        match_key = "id" if ("id" in user_obj) else self.config.user_match_key
         try:
             existing_user = await self.http_client.get(
                 self.folio_client.gateway_url + "/users",
@@ -362,7 +453,7 @@ class UserImporter:  # noqa: R0902
                 "preferredContactTypeId"
             )
         }
-        if self.only_update_present_fields:
+        if self.config.only_update_present_fields:
             new_personal = user_obj.pop("personal", {})
             existing_personal = existing_user.pop("personal", {})
             existing_preferred_first_name = existing_personal.pop("preferredFirstName", "")
@@ -419,7 +510,7 @@ class UserImporter:  # noqa: R0902
         )
         response.raise_for_status()
         async with self.lock:
-            self.logs["created"] += 1
+            self.stats.created += 1
         return response.json()
 
     async def set_preferred_contact_type(self, user_obj, existing_user) -> None:
@@ -440,22 +531,22 @@ class UserImporter:  # noqa: R0902
                 existing_user["personal"]["preferredContactTypeId"] = (
                     current_pref_contact
                     if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP
-                    else self.default_preferred_contact_type
+                    else self.config.default_preferred_contact_type
                 )
         else:
             logger.warning(
                 f"Preferred contact type not provided or is not a valid option: "
                 f"{PREFERRED_CONTACT_TYPES_MAP} Setting preferred contact type to "
-                f"{self.default_preferred_contact_type} or using existing value"
+                f"{self.config.default_preferred_contact_type} or using existing value"
             )
             mapped_contact_type = (
                 existing_user.get("personal", {}).get("preferredContactTypeId", "")
-                or self.default_preferred_contact_type
+                or self.config.default_preferred_contact_type
             )
             if "personal" not in existing_user:
                 existing_user["personal"] = {}
             existing_user["personal"]["preferredContactTypeId"] = (
-                mapped_contact_type or self.default_preferred_contact_type
+                mapped_contact_type or self.config.default_preferred_contact_type
             )
 
     async def create_or_update_user(
@@ -479,7 +570,7 @@ class UserImporter:  # noqa: R0902
             try:
                 update_user.raise_for_status()
                 async with self.lock:
-                    self.logs["updated"] += 1
+                    self.stats.updated += 1
                 return existing_user
             except Exception as ee:
                 logger.error(
@@ -488,7 +579,7 @@ class UserImporter:  # noqa: R0902
                 )
                 await self.errorfile.write(json.dumps(existing_user, ensure_ascii=False) + "\n")
                 async with self.lock:
-                    self.logs["failed"] += 1
+                    self.stats.failed += 1
                 return {}
         else:
             try:
@@ -501,7 +592,7 @@ class UserImporter:  # noqa: R0902
                 )
                 await self.errorfile.write(json.dumps(user_obj, ensure_ascii=False) + "\n")
                 async with self.lock:
-                    self.logs["failed"] += 1
+                    self.stats.failed += 1
                 return {}
 
     async def process_user_obj(self, user: str) -> dict:
@@ -895,13 +986,13 @@ class UserImporter:  # noqa: R0902
                 created=0,
                 updated=0,
                 failed=0,
-                visible=not self.no_progress,
+                visible=not self.config.no_progress,
             )  # Add a task to the progress bar
             openfile.seek(0)
             tasks = []
             for line_number, user in enumerate(openfile):
                 tasks.append(self.process_line(user, line_number))
-                if len(tasks) == self.batch_size:
+                if len(tasks) == self.config.batch_size:
                     start = time.time()
                     await asyncio.gather(*tasks)
                     duration = time.time() - start
@@ -909,15 +1000,15 @@ class UserImporter:  # noqa: R0902
                         progress.update(
                             self.task_progress,
                             advance=len(tasks),
-                            created=self.logs["created"],
-                            updated=self.logs["updated"],
-                            failed=self.logs["failed"],
+                            created=self.stats.created,
+                            updated=self.stats.updated,
+                            failed=self.stats.failed,
                         )
                         message = (
                             f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                            f"Batch of {self.batch_size} users processed in {duration:.2f} "
-                            f"seconds. - Users created: {self.logs['created']} - Users updated: "
-                            f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
+                            f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
+                            f"seconds. - Users created: {self.stats.created} - Users updated: "
+                            f"{self.stats.updated} - Users failed: {self.stats.failed}"
                         )
                         logger.info(message)
                     tasks = []
@@ -929,17 +1020,26 @@ class UserImporter:  # noqa: R0902
                     progress.update(
                         self.task_progress,
                         advance=len(tasks),
-                        created=self.logs["created"],
-                        updated=self.logs["updated"],
-                        failed=self.logs["failed"],
+                        created=self.stats.created,
+                        updated=self.stats.updated,
+                        failed=self.stats.failed,
                     )
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                         f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
-                        f"Users created: {self.logs['created']} - Users updated: "
-                        f"{self.logs['updated']} - Users failed: {self.logs['failed']}"
+                        f"Users created: {self.stats.created} - Users updated: "
+                        f"{self.stats.updated} - Users failed: {self.stats.failed}"
                     )
                     logger.info(message)
+
+    def get_stats(self) -> UserImporterStats:
+        """
+        Get current import statistics.
+
+        Returns:
+            Current statistics
+        """
+        return self.stats
 
 
 def set_up_cli_logging() -> None:
@@ -981,62 +1081,112 @@ app = cyclopts.App()
 
 @app.default
 def main(
+    config_file: Annotated[
+        Path | None, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = None,
     *,
     gateway_url: Annotated[
         str | None,
-        cyclopts.Parameter(env_var="FOLIO_GATEWAY_URL", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_GATEWAY_URL", show_env_var=True, group="FOLIO Connection Parameters"
+        ),
     ] = None,
     tenant_id: Annotated[
         str | None,
-        cyclopts.Parameter(env_var="FOLIO_TENANT_ID", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_TENANT_ID", show_env_var=True, group="FOLIO Connection Parameters"
+        ),
     ] = None,
     username: Annotated[
         str | None,
-        cyclopts.Parameter(env_var="FOLIO_USERNAME", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_USERNAME", show_env_var=True, group="FOLIO Connection Parameters"
+        ),
     ] = None,
     password: Annotated[
         str | None,
-        cyclopts.Parameter(env_var="FOLIO_PASSWORD", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_PASSWORD", show_env_var=True, group="FOLIO Connection Parameters"
+        ),
     ] = None,
     library_name: Annotated[
         str | None,
-        cyclopts.Parameter(env_var="FOLIO_LIBRARY_NAME", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_LIBRARY_NAME", show_env_var=True, group="Job Configuration Parameters"
+        ),
     ] = None,
-    user_file_path: Path | None = None,
+    user_file_paths: Annotated[
+        Tuple[Path, ...] | None,
+        cyclopts.Parameter(
+            name=["--user-file-paths", "--user-file-path"],
+            help=(
+                "Path(s) to user data file(s). "
+                "Accepts multiple values. Can be used as --user-file-paths or --user-file-path."
+            ),
+            group="Job Configuration Parameters",
+        ),
+    ] = None,
     member_tenant_id: Annotated[
         str | None,
-        cyclopts.Parameter(env_var="FOLIO_MEMBER_TENANT_ID", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_MEMBER_TENANT_ID",
+            show_env_var=True,
+            group="FOLIO Connection Parameters",
+        ),
     ] = None,
     fields_to_protect: Annotated[
-        str | None, cyclopts.Parameter(env_var="FOLIO_FIELDS_TO_PROTECT", show_env_var=True)
+        str | None,
+        cyclopts.Parameter(
+            env_var="FOLIO_FIELDS_TO_PROTECT",
+            show_env_var=True,
+            group="Job Configuration Parameters",
+        ),
     ] = None,
-    update_only_present_fields: bool = False,
+    update_only_present_fields: Annotated[
+        bool, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = False,
     limit_async_requests: Annotated[
         int,
-        cyclopts.Parameter(env_var="FOLIO_LIMIT_ASYNC_REQUESTS", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_LIMIT_ASYNC_REQUESTS",
+            show_env_var=True,
+            group="Job Configuration Parameters",
+        ),
     ] = 10,
     batch_size: Annotated[
         int,
-        cyclopts.Parameter(env_var="FOLIO_USER_IMPORT_BATCH_SIZE", show_env_var=True),
+        cyclopts.Parameter(
+            env_var="FOLIO_USER_IMPORT_BATCH_SIZE",
+            show_env_var=True,
+            group="Job Configuration Parameters",
+        ),
     ] = 250,
-    report_file_base_path: Path | None = None,
-    user_match_key: Literal["externalSystemId", "username", "barcode"] = "externalSystemId",
-    default_preferred_contact_type: Literal[
-        "001", "002", "003", "004", "005", "mail", "email", "text", "phone", "mobile"
+    report_file_base_path: Annotated[
+        Path | None, cyclopts.Parameter(group="Job Configuration Parameters")
+    ] = None,
+    user_match_key: Annotated[
+        Literal["externalSystemId", "username", "barcode"],
+        cyclopts.Parameter(group="Job Configuration Parameters"),
+    ] = "externalSystemId",
+    default_preferred_contact_type: Annotated[
+        Literal["001", "002", "003", "004", "005", "mail", "email", "text", "phone", "mobile"],
+        cyclopts.Parameter(group="Job Configuration Parameters"),
     ] = "email",
-    no_progress: bool = False,
+    no_progress: Annotated[bool, cyclopts.Parameter(group="Job Configuration Parameters")] = False,
 ) -> None:
     """
     Command-line interface to batch import users into FOLIO
 
     Parameters:
+        config_file (Path | None): Path to a JSON configuration file. Overrides job configuration parameters if provided.
         gateway_url (str): The FOLIO gateway URL.
         tenant_id (str): The FOLIO tenant ID.
         username (str): The FOLIO username.
         password (str): The FOLIO password.
         library_name (str): The library name associated with the job.
-        user_file_path (Path): The path to the user data file.
-        member_tenant_id (str): The member tenant ID for multi-tenant environments.
+        user_file_paths (Tuple[Path, ...]): Path(s) to the user data file(s). Use
+            --user-file-paths or --user-file-path (deprecated, will be removed in future versions).
+        member_tenant_id (str): The FOLIO ECS member tenant id (if applicable).
         fields_to_protect (str): Comma-separated list of fields to protect during update.
         update_only_present_fields (bool): Whether to update only fields present in the input.
         limit_async_requests (int): The maximum number of concurrent async HTTP requests.
@@ -1045,14 +1195,10 @@ def main(
         user_match_key (str): The key to match users (externalSystemId, username, barcode).
         default_preferred_contact_type (str): The default preferred contact type for users
         no_progress (bool): Whether to disable the progress bar.
-    """
+    """  # noqa: E501
     set_up_cli_logging()
     fields_to_protect = fields_to_protect or ""
     protect_fields = [f.strip() for f in fields_to_protect.split(",") if f.strip()]
-
-    # Semaphore to limit the number of async HTTP requests active at any given time
-    semaphore = asyncio.Semaphore(limit_async_requests)
-    batch_size = batch_size
 
     gateway_url, tenant_id, username, password = get_folio_connection_parameters(
         gateway_url, tenant_id, username, password
@@ -1065,26 +1211,55 @@ def main(
 
     if not library_name:
         raise ValueError("library_name is required")
-    if not user_file_path:
-        raise ValueError("user_file_path is required")
+
+    if not user_file_paths:
+        raise ValueError(
+            "You must provide at least one user file path using --user-file-paths or "
+            "--user-file-path."
+        )
+
+    # Expand any glob patterns in file paths
+    expanded_paths = []
+    for path_arg in user_file_paths:
+        path_str = str(path_arg)
+        # Check if it contains glob wildcards
+        if any(char in path_str for char in ["*", "?", "["]):
+            # Expand the glob pattern
+            matches = glob.glob(path_str)
+            if matches:
+                expanded_paths.extend([Path(p) for p in sorted(matches)])
+            else:
+                # No matches - treat as literal path (will error later if file doesn't exist)
+                expanded_paths.append(path_arg)
+        else:
+            expanded_paths.append(path_arg)
+
+    # Convert to single Path or List[Path] for Config
+    file_paths_list = expanded_paths if len(expanded_paths) > 1 else expanded_paths[0]
 
     report_file_base_path = report_file_base_path or Path.cwd()
     error_file_path = (
         report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
     )
     try:
-        importer = UserImporter(
-            folio_client,
-            library_name,
-            batch_size,
-            semaphore,
-            user_file_path,
-            user_match_key,
-            update_only_present_fields,
-            default_preferred_contact_type,
-            fields_to_protect=protect_fields,
-            no_progress=no_progress,
-        )
+        # Create UserImporter.Config object
+        if config_file:
+            with open(config_file, "r") as f:
+                config_data = json.load(f)
+                config = UserImporter.Config(**config_data)
+        else:
+            config = UserImporter.Config(
+                library_name=library_name,
+                batch_size=batch_size,
+                user_match_key=user_match_key,
+                only_update_present_fields=update_only_present_fields,
+                default_preferred_contact_type=default_preferred_contact_type,
+                fields_to_protect=protect_fields,
+                limit_simultaneous_requests=limit_async_requests,
+                user_file_paths=file_paths_list,
+                no_progress=no_progress,
+            )
+        importer = UserImporter(folio_client, config)
         asyncio.run(run_user_importer(importer, error_file_path))
     except Exception as ee:
         logger.critical(f"An unknown error occurred: {ee}")
