@@ -221,7 +221,7 @@ class MARCImportJob:
     bad_records_file: BinaryIO
     failed_batches_file: BinaryIO
     job_id: str
-    reporter: RichProgressReporter
+    reporter: ProgressReporter
     task_sent: str
     task_imported: str
     http_client: httpx.Client
