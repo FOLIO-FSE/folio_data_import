@@ -24,18 +24,13 @@ import tabulate
 from humps import decamelize
 from pydantic import BaseModel, Field
 from rich.logging import RichHandler
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TaskID,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 
 from folio_data_import import get_folio_connection_parameters, __version__ as app_version
-from folio_data_import._progress import ItemsPerSecondColumn
+from folio_data_import._progress import (
+    RichProgressReporter,
+    ProgressReporter,
+    NoOpProgressReporter,
+)
 from folio_data_import.custom_exceptions import (
     FolioDataImportBatchError,
     FolioDataImportJobError,
@@ -226,9 +221,9 @@ class MARCImportJob:
     bad_records_file: BinaryIO
     failed_batches_file: BinaryIO
     job_id: str
-    progress: Progress
-    pbar_sent: TaskID
-    pbar_imported: TaskID
+    reporter: RichProgressReporter
+    task_sent: str
+    task_imported: str
     http_client: httpx.Client
     current_file: List[Path] | List[BinaryIO]
     record_batch: List[bytes]
@@ -247,9 +242,11 @@ class MARCImportJob:
         self,
         folio_client: folioclient.FolioClient,
         config: "MARCImportJob.Config",
+        reporter: ProgressReporter | None = None,
     ) -> None:
         self.folio_client: folioclient.FolioClient = folio_client
         self.config = config
+        self.reporter = reporter or NoOpProgressReporter()
         self.current_retry_timeout: float | None = None
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
             config.marc_record_preprocessors or "", **(config.preprocessors_args or {})
@@ -400,8 +397,8 @@ class MARCImportJob:
 
         try:
             status = [job for job in job_status["jobExecutions"] if job["id"] == self.job_id][0]
-            self.progress.update(
-                self.pbar_imported,
+            self.reporter.update_task(
+                self.task_imported,
                 advance=status["progress"]["current"] - self.last_current,
             )
             self.last_current = status["progress"]["current"]
@@ -415,8 +412,8 @@ class MARCImportJob:
                 status = [job for job in job_status["jobExecutions"] if job["id"] == self.job_id][
                     0
                 ]
-                self.progress.update(
-                    self.pbar_imported,
+                self.reporter.update_task(
+                    self.task_imported,
                     advance=status["progress"]["current"] - self.last_current,
                 )
                 self.last_current = status["progress"]["current"]
@@ -593,7 +590,7 @@ class MARCImportJob:
             post_batch.raise_for_status()
             self.total_records_sent += len(self.record_batch)
             self.record_batch = []
-            self.progress.update(self.pbar_sent, advance=len(batch_payload["initialRecords"]))
+            self.reporter.update_task(self.task_sent, advance=len(batch_payload["initialRecords"]))
         except httpx.HTTPStatusError as e:
             if e.response.status_code in [
                 500,
@@ -602,7 +599,9 @@ class MARCImportJob:
             ]:  # TODO: Update once we no longer have to support < Sunflower to just be 400
                 self.total_records_sent += len(self.record_batch)
                 self.record_batch = []
-                self.progress.update(self.pbar_sent, advance=len(batch_payload["initialRecords"]))
+                self.reporter.update_task(
+                    self.task_sent, advance=len(batch_payload["initialRecords"])
+                )
             else:
                 for record in self.record_batch:
                     self.failed_batches_file.write(record)
@@ -627,9 +626,9 @@ class MARCImportJob:
         counter = 0
         for import_file in files:
             file_path = Path(import_file.name)
-            self.progress.update(
-                self.pbar_sent,
-                description=f"Sent ({os.path.basename(import_file.name)}): ",
+            self.reporter.update_task(
+                self.task_sent,
+                description=f"Sent ({os.path.basename(import_file.name)})",
             )
             reader = pymarc.MARCReader(import_file, hide_utf8_warnings=True)
             for idx, record in enumerate(reader, start=1):
@@ -775,30 +774,16 @@ class MARCImportJob:
                 logger.error(f"Error opening file: {e}")
                 raise e
             total_records = await self.read_total_records(files)
-            with (
-                Progress(
-                    "{task.description}",
-                    SpinnerColumn(),
-                    BarColumn(),
-                    MofNCompleteColumn(),
-                    "[",
-                    TimeElapsedColumn(),
-                    "<",
-                    TimeRemainingColumn(),
-                    "/",
-                    ItemsPerSecondColumn(),
-                    "]",
-                ) as import_progress,
-            ):
-                self.progress = import_progress
+
+            with self.reporter:
                 try:
-                    self.pbar_sent = self.progress.add_task(
-                        "Sent: ", total=total_records, visible=not self.config.no_progress
+                    self.task_sent = self.reporter.start_task(
+                        "sent", total=total_records, description="Sent"
                     )
-                    self.pbar_imported = self.progress.add_task(
-                        f"Imported: ({self.job_hrid})",
+                    self.task_imported = self.reporter.start_task(
+                        f"imported_{self.job_hrid}",
                         total=total_records,
-                        visible=not self.config.no_progress,
+                        description=f"Imported ({self.job_hrid})",
                     )
                     await self.process_records(files, total_records)
                     while not self.finished:
@@ -1146,7 +1131,15 @@ def main(
                 job_ids_file_path=Path(job_ids_file_path) if job_ids_file_path else None,
                 show_file_names_in_data_import_logs=file_names_in_di_logs,
             )
-        job = MARCImportJob(folio_client, config)
+
+        # Create progress reporter
+        reporter = (
+            NoOpProgressReporter()
+            if no_progress
+            else RichProgressReporter(show_speed=True, show_time=True)
+        )
+
+        job = MARCImportJob(folio_client, config, reporter)
         asyncio.run(run_job(job))
     except Exception as e:
         logger.error("Could not initialize MARCImportJob: " + str(e))

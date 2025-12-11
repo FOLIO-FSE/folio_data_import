@@ -10,7 +10,6 @@ import glob as glob_module
 import json
 import logging
 import sys
-import time
 from datetime import datetime as dt
 from io import TextIOWrapper
 from pathlib import Path
@@ -22,17 +21,13 @@ from folioclient import FolioClient
 import httpx
 from pydantic import BaseModel, Field
 from rich.logging import RichHandler
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 
 from folio_data_import import get_folio_connection_parameters
-from folio_data_import._progress import BatchPosterStatsColumn, ItemsPerSecondColumn
+from folio_data_import._progress import (
+    RichProgressReporter,
+    ProgressReporter,
+    NoOpProgressReporter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +248,7 @@ class BatchPoster:
         folio_client: FolioClient,
         config: "BatchPoster.Config",
         failed_records_file=None,
+        reporter: ProgressReporter | None = None,
     ):
         """
         Initialize BatchPoster.
@@ -263,9 +259,11 @@ class BatchPoster:
             failed_records_file: Optional file handle or path for writing failed records.
                 Can be an open file handle (managed by caller) or a string/Path
                 (will be opened/closed by BatchPoster).
+            reporter: Optional progress reporter. If None, uses NoOpProgressReporter.
         """
         self.folio_client = folio_client
         self.config = config
+        self.reporter = reporter or NoOpProgressReporter()
         self.api_info = get_api_info(config.object_type)
         self.stats = BatchPosterStats()
 
@@ -720,9 +718,9 @@ class BatchPoster:
             self.stats.records_created += num_creates
             self.stats.records_updated += num_updates
             # Update progress bar if available
-            if hasattr(self, "progress") and hasattr(self, "task_progress"):
-                self.progress.update(
-                    self.task_progress,
+            if hasattr(self, "reporter") and hasattr(self, "task_id"):
+                self.reporter.update_task(
+                    self.task_id,
                     advance=len(batch),
                     posted=self.stats.records_posted,
                     created=self.stats.records_created,
@@ -736,9 +734,9 @@ class BatchPoster:
             self._write_failed_batch(batch)
 
             # Update progress bar if available
-            if hasattr(self, "progress") and hasattr(self, "task_progress"):
-                self.progress.update(
-                    self.task_progress,
+            if hasattr(self, "reporter") and hasattr(self, "task_id"):
+                self.reporter.update_task(
+                    self.task_id,
                     advance=len(batch),
                     posted=self.stats.records_posted,
                     created=self.stats.records_created,
@@ -752,9 +750,9 @@ class BatchPoster:
             self._write_failed_batch(batch)
 
             # Update progress bar if available
-            if hasattr(self, "progress") and hasattr(self, "task_progress"):
-                self.progress.update(
-                    self.task_progress,
+            if hasattr(self, "reporter") and hasattr(self, "task_id"):
+                self.reporter.update_task(
+                    self.task_id,
                     advance=len(batch),
                     posted=self.stats.records_posted,
                     created=self.stats.records_created,
@@ -770,9 +768,9 @@ class BatchPoster:
             self._write_failed_batch(batch)
 
             # Update progress bar if available
-            if hasattr(self, "progress") and hasattr(self, "task_progress"):
-                self.progress.update(
-                    self.task_progress,
+            if hasattr(self, "reporter") and hasattr(self, "task_id"):
+                self.reporter.update_task(
+                    self.task_id,
                     advance=len(batch),
                     posted=self.stats.records_posted,
                     created=self.stats.records_created,
@@ -838,20 +836,22 @@ class BatchPoster:
                 upsert=True
             )
 
+            reporter = RichProgressReporter(enabled=True)
+
             # With failed records file
             with open("failed_items.jsonl", "w") as failed_file:
-                poster = BatchPoster(config, folio_client, failed_records_file=failed_file)
+                poster = BatchPoster(folio_client, config, failed_records_file=failed_file, reporter=reporter)
                 async with poster:
                     stats = await poster.do_work(["items1.jsonl", "items2.jsonl"])
 
             # Or let BatchPoster manage the file
-            poster = BatchPoster(config, folio_client, failed_records_file="failed_items.jsonl")
+            poster = BatchPoster(folio_client, config, failed_records_file="failed_items.jsonl", reporter=reporter)
             async with poster:
                 stats = await poster.do_work("items.jsonl")
 
             print(f"Posted: {stats.records_posted}, Failed: {stats.records_failed}")
             ```
-        """
+        """  # noqa: E501
         # Reset statistics
         self.stats = BatchPosterStats()
 
@@ -887,30 +887,12 @@ class BatchPoster:
                     buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b"")
                 )
 
-        # Set up progress bar
-        with Progress(
-            "{task.description}",
-            SpinnerColumn(),
-            BarColumn(),
-            MofNCompleteColumn(),
-            BatchPosterStatsColumn(),
-            "[",
-            TimeElapsedColumn(),
-            "<",
-            TimeRemainingColumn(),
-            "/",
-            ItemsPerSecondColumn(),
-            "]",
-        ) as progress:
-            self.progress = progress
-            self.task_progress = progress.add_task(
-                f"Posting {self.config.object_type}: ",
+        # Set up progress reporting
+        with self.reporter:
+            self.task_id = self.reporter.start_task(
+                f"posting_{self.config.object_type}",
                 total=total_lines,
-                posted=0,
-                created=0,
-                updated=0,
-                failed=0,
-                visible=not self.config.no_progress,
+                description=f"Posting {self.config.object_type}",
             )
 
             # Process each file
@@ -928,7 +910,7 @@ class BatchPoster:
                     logger.error("Error processing file %s: %s", file_path, e, exc_info=True)
                     raise
 
-        return self.stats
+            return self.stats
 
     def get_stats(self) -> BatchPosterStats:
         """
@@ -1237,7 +1219,16 @@ async def run_batch_poster(
     """
     async with folio_client:
         try:
-            poster = BatchPoster(folio_client, config, failed_records_file=failed_records_file)
+            # Create progress reporter
+            reporter = (
+                NoOpProgressReporter()
+                if config.no_progress
+                else RichProgressReporter(show_speed=True, show_time=True)
+            )
+
+            poster = BatchPoster(
+                folio_client, config, failed_records_file=failed_records_file, reporter=reporter
+            )
             async with poster:
                 await poster.do_work(files_to_process)
                 log_final_stats(poster)
