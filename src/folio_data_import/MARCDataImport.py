@@ -96,8 +96,8 @@ class MARCImportJob:
         batch_size (int): The number of source records to include in a record batch (default=10).
         batch_delay (float): The number of seconds to wait between record batches (default=0).
         no_progress (bool): Disable progress bars (eg. for running in a CI environment).
-        marc_record_preprocessors (list or str): A list of callables or a string representing
-            the MARC record preprocessor(s) to apply to each record before import.
+        marc_record_preprocessors (list or str): A list of callables, or a string representing
+            a comma-separated list of MARC record preprocessor names to apply to each record before import.
         preprocessor_args (dict): A dictionary of arguments to pass to the MARC record preprocessor(s).
         let_summary_fail (bool): If True, will not retry or fail the import if the final job summary
             cannot be retrieved (default=False).
@@ -1121,7 +1121,7 @@ def main(
                 batch_size=batch_size,
                 batch_delay=batch_delay,
                 marc_record_preprocessors=preprocessors,
-                preprocessor_args=preprocessor_args,
+                preprocessors_args=preprocessor_args,
                 no_progress=no_progress,
                 no_summary=no_summary,
                 let_summary_fail=let_summary_fail,
