@@ -147,7 +147,7 @@ def mock_folio_client():
 @pytest.fixture
 def preserve_fields_config():
     """Fixture for config with preserve_fields."""
-    return BatchPoster.Config()
+    return BatchPoster.Config(object_type="Items")
 
 
 @pytest.fixture
