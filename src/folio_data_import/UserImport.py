@@ -18,17 +18,13 @@ import httpx
 from aiofiles.threadpool.text import AsyncTextIOWrapper
 from pydantic import BaseModel, Field
 from rich.logging import RichHandler
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
 
 from folio_data_import import get_folio_connection_parameters
-from folio_data_import._progress import ItemsPerSecondColumn, UserStatsColumn
+from folio_data_import._progress import (
+    RichProgressReporter,
+    ProgressReporter,
+    NoOpProgressReporter,
+)
 
 try:
     utc = datetime.UTC
@@ -157,9 +153,11 @@ class UserImporter:  # noqa: R0902
         self,
         folio_client: folioclient.FolioClient,
         config: "UserImporter.Config",
+        reporter: ProgressReporter | None = None,
     ) -> None:
         self.config = config
         self.folio_client: folioclient.FolioClient = folio_client
+        self.reporter = reporter or NoOpProgressReporter()
         self.limit_simultaneous_requests = asyncio.Semaphore(config.limit_simultaneous_requests)
         # Build reference data maps (these need processing)
         self.patron_group_map: dict = self.build_ref_data_id_map(
@@ -961,33 +959,15 @@ class UserImporter:  # noqa: R0902
         Args:
             openfile: The file or file-like object to process.
         """
-        with Progress(  # Set up the progress bar
-            "{task.description}",
-            SpinnerColumn(),
-            BarColumn(),
-            MofNCompleteColumn(),
-            UserStatsColumn(),
-            "[",
-            TimeElapsedColumn(),
-            "<",
-            TimeRemainingColumn(),
-            "/",
-            ItemsPerSecondColumn(),
-            "]",
-        ) as progress:
-            with open(openfile.name, "rb") as f:
-                total_lines = sum(
-                    buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b"")
-                )
-            self.progress = progress
-            self.task_progress = progress.add_task(
-                "Importing users: ",
+        with open(openfile.name, "rb") as f:
+            total_lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b""))
+
+        with self.reporter:
+            task_id = self.reporter.start_task(
+                "users",
                 total=total_lines,
-                created=0,
-                updated=0,
-                failed=0,
-                visible=not self.config.no_progress,
-            )  # Add a task to the progress bar
+                description="Importing users",
+            )
             openfile.seek(0)
             tasks = []
             for line_number, user in enumerate(openfile):
@@ -997,8 +977,8 @@ class UserImporter:  # noqa: R0902
                     await asyncio.gather(*tasks)
                     duration = time.time() - start
                     async with self.lock:
-                        progress.update(
-                            self.task_progress,
+                        self.reporter.update_task(
+                            task_id,
                             advance=len(tasks),
                             created=self.stats.created,
                             updated=self.stats.updated,
@@ -1017,8 +997,8 @@ class UserImporter:  # noqa: R0902
                 await asyncio.gather(*tasks)
                 duration = time.time() - start
                 async with self.lock:
-                    progress.update(
-                        self.task_progress,
+                    self.reporter.update_task(
+                        task_id,
                         advance=len(tasks),
                         created=self.stats.created,
                         updated=self.stats.updated,
@@ -1259,7 +1239,15 @@ def main(
                 user_file_paths=file_paths_list,
                 no_progress=no_progress,
             )
-        importer = UserImporter(folio_client, config)
+
+        # Create progress reporter
+        reporter = (
+            NoOpProgressReporter()
+            if no_progress
+            else RichProgressReporter(show_speed=True, show_time=True)
+        )
+
+        importer = UserImporter(folio_client, config, reporter)
         asyncio.run(run_user_importer(importer, error_file_path))
     except Exception as ee:
         logger.critical(f"An unknown error occurred: {ee}")
