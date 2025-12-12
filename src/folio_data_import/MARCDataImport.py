@@ -302,7 +302,7 @@ class MARCImportJob:
         """
         for file in self.config.marc_files:
             with open(file, "rb") as f:
-                file_length = await self.read_total_records([f])
+                file_length = await self._count_records([f])
             expected_batches = math.ceil(file_length / self.config.split_size)
             logger.info(
                 f"{file.name} contains {file_length} records."
@@ -368,7 +368,7 @@ class MARCImportJob:
                     "=PREPARING_FOR_PREVIEW&uiStatusAny=READY_FOR_PREVIEW&uiStatusAny=RUNNING&limit=50"
                 )
                 self.current_retry_timeout = None
-        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
+        except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
             if (
                 self.current_retry_timeout is not None
@@ -418,11 +418,7 @@ class MARCImportJob:
                 )
                 self.last_current = status["progress"]["current"]
                 self.finished = True
-            except (
-                httpx.ConnectTimeout,
-                httpx.ReadTimeout,
-                httpx.HTTPStatusError,
-            ) as e:
+            except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
                 if not hasattr(e, "response") or e.response.status_code in [502, 504]:
                     error_text = e.response.text if hasattr(e, "response") else str(e)
                     logger.warning(f"SERVER ERROR fetching job status: {error_text}. Retrying.")
@@ -550,9 +546,9 @@ class MARCImportJob:
             raise e
 
     @staticmethod
-    async def read_total_records(files: List[BinaryIO]) -> int:
+    async def _count_records(files: List[BinaryIO]) -> int:
         """
-        Reads the total number of records from the given files.
+        Internal method to count total number of records from files.
 
         Args:
             files (list): List of files to read.
@@ -568,6 +564,26 @@ class MARCImportJob:
                     break
                 total_records += chunk.count(b"\x1d")
             import_file.seek(0)
+        return total_records
+
+    @staticmethod
+    async def read_total_records(files: List[BinaryIO]) -> int:
+        """
+        Count records from files with per-file logging.
+
+        Args:
+            files (list): List of files to read.
+
+        Returns:
+            int: The total number of records found in the files.
+        """
+        total_records = 0
+        for import_file in files:
+            file_name = os.path.basename(import_file.name)
+            logger.info(f"Counting records in {file_name}...")
+            file_record_count = await MARCImportJob._count_records([import_file])
+            total_records += file_record_count
+            logger.info(f"Counted {file_record_count} records in {file_name}")
         return total_records
 
     async def process_record_batch(self, batch_payload) -> None:
@@ -773,6 +789,7 @@ class MARCImportJob:
             except IndexError as e:
                 logger.error(f"Error opening file: {e}")
                 raise e
+
             total_records = await self.read_total_records(files)
 
             with self.reporter:
@@ -886,11 +903,11 @@ class MARCImportJob:
                     f"/metadata-provider/jobSummary/{self.job_id}"
                 )
             self.current_retry_timeout = None
-        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
+        except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
             if (self._max_summary_retries > self._summary_retries) and (
                 not hasattr(e, "response")
-                or (hasattr(e, "response") and e.response.status_code in [502, 504])
+                or (hasattr(e, "response") and e.response.status_code in [502, 504, 404])
                 and not self.config.let_summary_fail
             ):
                 logger.warning(f"SERVER ERROR fetching job summary: {e}. Retrying.")
