@@ -312,7 +312,7 @@ class RichProgressReporter(BaseProgressReporter):
         super().__init__(enabled)
         self._show_speed = show_speed
         self._show_time = show_time
-        self._progress: Any = None
+        self._progress: Progress | None = None
         self._task_map: dict[str, Any] = {}  # Maps task names to Rich TaskIDs
 
     def _create_progress(self) -> Any:
