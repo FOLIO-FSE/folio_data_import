@@ -302,7 +302,7 @@ class MARCImportJob:
         """
         for file in self.config.marc_files:
             with open(file, "rb") as f:
-                file_length = await self._count_records([f])
+                file_length = await self.read_total_records([f])
             expected_batches = math.ceil(file_length / self.config.split_size)
             logger.info(
                 f"{file.name} contains {file_length} records."
@@ -370,10 +370,15 @@ class MARCImportJob:
                 self.current_retry_timeout = None
         except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
+
+            # Raise non-retriable HTTP errors immediately
+            if hasattr(e, "response") and e.response.status_code not in [502, 504, 401]:
+                raise e
+
+            # For retriable errors or connection errors
             if (
                 self.current_retry_timeout is not None
                 and self.current_retry_timeout <= RETRY_TIMEOUT_MAX
-                and (not hasattr(e, "response") or e.response.status_code in [502, 504, 401])
             ):
                 logger.warning(f"SERVER ERROR fetching job status: {error_text}. Retrying.")
                 sleep(0.25)
@@ -381,7 +386,6 @@ class MARCImportJob:
             elif (
                 self.current_retry_timeout is not None
                 and self.current_retry_timeout > RETRY_TIMEOUT_MAX
-                and (not hasattr(e, "response") or e.response.status_code in [502, 504, 401])
             ):
                 logger.critical(
                     f"SERVER ERROR fetching job status: {error_text}. Max retries exceeded."
@@ -419,16 +423,18 @@ class MARCImportJob:
                 self.last_current = status["progress"]["current"]
                 self.finished = True
             except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
-                if not hasattr(e, "response") or e.response.status_code in [502, 504]:
-                    error_text = e.response.text if hasattr(e, "response") else str(e)
-                    logger.warning(f"SERVER ERROR fetching job status: {error_text}. Retrying.")
-                    sleep(0.25)
-                    with self.folio_client.get_folio_http_client() as temp_client:
-                        temp_client.timeout = self.current_retry_timeout
-                        self.folio_client.httpx_client = temp_client
-                        return await self.get_job_status()
-                else:
+                # Raise non-retriable HTTP errors immediately
+                if hasattr(e, "response") and e.response.status_code not in [502, 504]:
                     raise e
+
+                # Retry retriable errors or connection errors
+                error_text = e.response.text if hasattr(e, "response") else str(e)
+                logger.warning(f"SERVER ERROR fetching job status: {error_text}. Retrying.")
+                sleep(0.25)
+                with self.folio_client.get_folio_http_client() as temp_client:
+                    temp_client.timeout = self.current_retry_timeout
+                    self.folio_client.httpx_client = temp_client
+                    return await self.get_job_status()
 
     async def set_job_file_name(self) -> None:
         """
@@ -466,28 +472,33 @@ class MARCImportJob:
             None
 
         Raises:
-            HTTPError: If there is an error creating the job.
+            FolioHTTPError: If there is an error creating the job.
         """
         try:
-            create_job = self.http_client.post(
+            job_response = self.folio_client.folio_post(
                 "/change-manager/jobExecutions",
-                json={"sourceType": "ONLINE", "userId": self.folio_client.current_user},
+                {"sourceType": "ONLINE", "userId": self.folio_client.current_user},
             )
-            create_job.raise_for_status()
-        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as e:
-            if not hasattr(e, "response") or e.response.status_code in [502, 504]:
-                logger.warning(f"SERVER ERROR creating job: {e}. Retrying.")
-                sleep(0.25)
-                return await self.create_folio_import_job()
-            else:
-                logger.error(
-                    "Error creating job: "
-                    + str(e)
-                    + "\n"
-                    + getattr(getattr(e, "response", ""), "text", "")
-                )
+        except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
+            # Raise non-retriable HTTP errors immediately
+            if hasattr(e, "response") and e.response.status_code not in [502, 504]:
                 raise e
-        self.job_id = create_job.json()["parentJobExecutionId"]
+
+            # Retry retriable errors or connection errors
+            error_text = e.response.text if hasattr(e, "response") else str(e)
+            logger.warning(f"SERVER ERROR creating job: {error_text}. Retrying.")
+            sleep(0.25)
+            return await self.create_folio_import_job()
+
+        try:
+            self.job_id = job_response["parentJobExecutionId"]
+        except (KeyError, TypeError) as e:
+            logger.error(
+                f"Invalid job response from FOLIO API. Expected 'parentJobExecutionId' key. "
+                f"Response: {job_response}"
+            )
+            raise ValueError(f"FOLIO API returned invalid job response: {job_response}") from e
+
         if self.config.show_file_names_in_data_import_logs:
             await self.set_job_file_name()
         self.job_ids.append(self.job_id)
@@ -790,7 +801,7 @@ class MARCImportJob:
                 logger.error(f"Error opening file: {e}")
                 raise e
 
-            total_records = await self.read_total_records(files)
+            total_records = await self._count_records(files)
 
             with self.reporter:
                 try:
@@ -905,11 +916,12 @@ class MARCImportJob:
             self.current_retry_timeout = None
         except (folioclient.FolioConnectionError, folioclient.FolioHTTPError) as e:
             error_text = e.response.text if hasattr(e, "response") else str(e)
-            if (self._max_summary_retries > self._summary_retries) and (
-                not hasattr(e, "response")
-                or (hasattr(e, "response") and e.response.status_code in [502, 504, 404])
-                and not self.config.let_summary_fail
-            ):
+            if hasattr(e, "response") and e.response.status_code not in [502, 504, 404]:
+                raise e
+
+            if (
+                self._max_summary_retries > self._summary_retries
+            ) and not self.config.let_summary_fail:
                 logger.warning(f"SERVER ERROR fetching job summary: {e}. Retrying.")
                 sleep(0.25)
                 with self.folio_client.get_folio_http_client() as temp_client:
@@ -917,17 +929,13 @@ class MARCImportJob:
                     self.folio_client.httpx_client = temp_client
                     self._summary_retries += 1
                     return await self.get_job_summary()
-            elif (self._summary_retries >= self._max_summary_retries) or (
-                hasattr(e, "response")
-                and (e.response.status_code in [502, 504] and self.config.let_summary_fail)
-            ):
+            else:
                 logger.warning(
                     f"SERVER ERROR fetching job summary: {error_text}."
                     " Skipping final summary check."
                 )
                 job_summary = {}
-            else:
-                raise e
+
         return job_summary
 
 
