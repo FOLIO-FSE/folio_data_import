@@ -25,11 +25,12 @@ from humps import decamelize
 from pydantic import BaseModel, Field
 from rich.logging import RichHandler
 
-from folio_data_import import get_folio_connection_parameters, __version__ as app_version
+from folio_data_import import __version__ as app_version
+from folio_data_import import get_folio_connection_parameters
 from folio_data_import._progress import (
-    RichProgressReporter,
-    ProgressReporter,
     NoOpProgressReporter,
+    ProgressReporter,
+    RichProgressReporter,
 )
 from folio_data_import.custom_exceptions import (
     FolioDataImportBatchError,
@@ -318,6 +319,27 @@ class MARCImportJob:
                     await self.import_marc_file()
             self.move_file_to_complete(file)
 
+    @staticmethod
+    def _remove_if_empty(file_path: Path | str, message: str | None = None) -> None:
+        """
+        Remove a file if it's empty.
+
+        Args:
+            file_path: Path to the file to check and potentially remove.
+            message: Optional custom log message to use when file is removed.
+        """
+        file_path = Path(file_path) if isinstance(file_path, str) else file_path
+        try:
+            if file_path.stat().st_size == 0:
+                file_path.unlink(missing_ok=True)
+                if message:
+                    logger.info(message)
+                else:
+                    logger.info(f"Removed empty file: {file_path.name}")
+        except FileNotFoundError:
+            # File doesn't exist, nothing to do
+            pass
+
     async def wrap_up(self) -> None:
         """
         Wraps up the data import process.
@@ -328,18 +350,21 @@ class MARCImportJob:
         Returns:
             None
         """
-        with open(self.bad_records_file.name, "rb") as bad_records:
-            if not bad_records.read(1):
-                os.remove(bad_records.name)
-                logger.info("No bad records found. Removing bad records file.")
-        with open(self.failed_batches_file.name, "rb") as failed_batches:
-            if not failed_batches.read(1):
-                os.remove(failed_batches.name)
-                logger.info("No failed batches. Removing failed batches file.")
+        # Check and remove empty files if necessary
+        self._remove_if_empty(
+            self.bad_records_file.name, "No bad records found. Removing bad records file."
+        )
+        self._remove_if_empty(
+            self.failed_batches_file.name, "No failed batches. Removing failed batches file."
+        )
+
         with open(self.job_ids_file_path, "a+") as job_ids_file:
             logger.info(f"Writing job IDs to {self.job_ids_file_path}")
             for job_id in self.job_ids:
                 job_ids_file.write(f"{job_id}\n")
+        self._remove_if_empty(
+            self.job_ids_file_path, "No job IDs to write. Removing job IDs file."
+        )
         logger.info("Import complete.")
         logger.info(f"Total records imported: {self.total_records_sent}")
 
@@ -683,6 +708,8 @@ class MARCImportJob:
                     if reader.current_chunk:
                         self.bad_records_file.write(reader.current_chunk)
             if not self.config.split_files:
+                # Close this file handle so Windows releases the lock, then move
+                import_file.close()
                 self.move_file_to_complete(file_path)
         if self.record_batch or not self.finished:
             await self.process_record_batch(
