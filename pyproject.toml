@@ -1,6 +1,6 @@
 [project]
 name = "folio_data_import"
-version = "0.5.0b3"
+version = "0.5.0b4"
 description = "A python module to perform bulk import of data into a FOLIO environment. Currently supports MARC and user data import."
 authors = [{ name = "Brooks Travis", email = "brooks.travis@gmail.com" }]
 license = "MIT"
