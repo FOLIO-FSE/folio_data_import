@@ -245,10 +245,11 @@ class BatchPosterStatsColumn(ProgressColumn):
 class GenericStatsColumn(ProgressColumn):
     """Renders generic statistics for any task.
 
-    The stat_configs class attribute can be customized by subclassing or
+    The ``stat_configs`` class attribute can be customized by subclassing or
     direct assignment to change which stats are displayed and their styling.
 
-    Example:
+    Example::
+
         # Customize via subclass
         class CustomStatsColumn(GenericStatsColumn):
             stat_configs = [
@@ -259,6 +260,7 @@ class GenericStatsColumn(ProgressColumn):
 
         # Or modify directly
         GenericStatsColumn.stat_configs.append(("custom_stat", "Custom", "magenta"))
+
     """
 
     stat_configs: list[tuple[str, str, str]] = [

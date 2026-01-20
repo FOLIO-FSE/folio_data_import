@@ -67,6 +67,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/_autosummary/
 
 # PyBuilder
 target/
@@ -137,3 +138,5 @@ failed*.txt
 *.lock
 pylock.toml
 *_cache/
+folio_migration_tools/
+examples/
