@@ -812,6 +812,7 @@ class BatchPoster:
         Main orchestration method for processing files.
 
         This is the primary entry point for batch posting from files. It handles:
+
         - Single or multiple file processing
         - Progress tracking and logging
         - Failed record collection
@@ -819,8 +820,9 @@ class BatchPoster:
 
         Mimics the folio_migration_tools BatchPoster.do_work() workflow.
 
-        Note: To write failed records, pass a file handle or path to the
-        BatchPoster constructor's `failed_records_file` parameter.
+        Note:
+            To write failed records, pass a file handle or path to the
+            BatchPoster constructor's ``failed_records_file`` parameter.
 
         Args:
             file_paths: Path(s) to JSONL file(s) to process
@@ -828,8 +830,8 @@ class BatchPoster:
         Returns:
             Final statistics from the posting operation
 
-        Example:
-            ```python
+        Example::
+
             config = BatchPosterConfig(
                 object_type="Items",
                 batch_size=100,
@@ -840,18 +842,26 @@ class BatchPoster:
 
             # With failed records file
             with open("failed_items.jsonl", "w") as failed_file:
-                poster = BatchPoster(folio_client, config, failed_records_file=failed_file, reporter=reporter)
+                poster = BatchPoster(
+                    folio_client, config,
+                    failed_records_file=failed_file,
+                    reporter=reporter
+                )
                 async with poster:
                     stats = await poster.do_work(["items1.jsonl", "items2.jsonl"])
 
             # Or let BatchPoster manage the file
-            poster = BatchPoster(folio_client, config, failed_records_file="failed_items.jsonl", reporter=reporter)
+            poster = BatchPoster(
+                folio_client, config,
+                failed_records_file="failed_items.jsonl",
+                reporter=reporter
+            )
             async with poster:
                 stats = await poster.do_work("items.jsonl")
 
             print(f"Posted: {stats.records_posted}, Failed: {stats.records_failed}")
-            ```
-        """  # noqa: E501
+
+        """
         # Reset statistics
         self.stats = BatchPosterStats()
 

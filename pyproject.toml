@@ -34,6 +34,14 @@ dev = [
     "ruff>=0.14.2",
     "ty>=0.0.1a33",
 ]
+docs = [
+    "sphinx>=7.0.0",
+    "sphinx-book-theme>=1.0.0",
+    "myst-parser>=2.0.0",
+    "sphinx-autodoc-typehints>=2.0.0",
+    "sphinx-design>=0.5.0",
+    "sphinx-autobuild>=2024.0.0",
+]
 
 [project.scripts]
 folio-data-import = "folio_data_import.__main__:app"
