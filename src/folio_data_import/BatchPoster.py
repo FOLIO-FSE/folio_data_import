@@ -79,6 +79,13 @@ def get_api_info(object_type: str) -> Dict[str, Any]:
             "is_batch": True,
             "supports_upsert": True,
         },
+        "ShadowInstances": {
+            "object_name": "instances",
+            "api_endpoint": "/instance-storage/batch/synchronous",
+            "query_endpoint": "/instance-storage/instances",
+            "is_batch": True,
+            "supports_upsert": True,
+        },
     }
 
     if object_type not in api_info:
@@ -135,10 +142,13 @@ class BatchPoster:
         """Configuration for BatchPoster operations."""
 
         object_type: Annotated[
-            Literal["Instances", "Holdings", "Items"],
+            Literal["Instances", "Holdings", "Items", "ShadowInstances"],
             Field(
                 title="Object type",
-                description="The type of inventory object to post: Instances, Holdings, or Items",
+                description=(
+                    "The type of inventory object to post: Instances, Holdings, Items, "
+                    "or ShadowInstances (for consortium shadow copies)"
+                ),
             ),
         ]
         batch_size: Annotated[
@@ -235,6 +245,16 @@ class BatchPoster:
                 ),
             ),
         ] = None
+        rerun_failed_records: Annotated[
+            bool,
+            Field(
+                title="Rerun failed records",
+                description=(
+                    "After the main run, reprocess any failed records one at a time. "
+                    "Requires --failed-records-file to be set."
+                ),
+            ),
+        ] = False
         no_progress: Annotated[
             bool,
             Field(
@@ -391,10 +411,21 @@ class BatchPoster:
         """
         Preserve specific fields from existing record during upsert.
 
+        Always preserves ``hrid`` (human-readable ID) and ``lastCheckIn`` (circulation data)
+        from existing records to prevent data loss. Optionally preserves ``status``
+        based on configuration.
+
         Args:
             updates: Dictionary being prepared for update
             existing_record: The existing record in FOLIO
         """
+        # Always preserve these fields - they should never be overwritten
+        always_preserve = ["hrid", "lastCheckIn"]
+        for key in always_preserve:
+            if key in existing_record:
+                updates[key] = existing_record[key]
+
+        # Conditionally preserve item status
         if self.config.preserve_item_status and "status" in existing_record:
             updates["status"] = existing_record["status"]
 
@@ -454,6 +485,10 @@ class BatchPoster:
         """
         Prepare a record for upsert by adding version and patching fields.
 
+        For MARC-sourced Instance records, only suppression flags, deleted status,
+        statistical codes, administrative notes, and instance status are allowed
+        to be patched. This protects MARC-managed fields from being overwritten.
+
         Args:
             new_record: The new record to prepare
             existing_record: The existing record in FOLIO
@@ -461,8 +496,42 @@ class BatchPoster:
         # Set the version for optimistic locking
         new_record["_version"] = existing_record.get("_version", 1)
 
-        # Apply patching if configured
-        if self.config.patch_existing_records:
+        # Check if this is a MARC-sourced record (Instances only)
+        is_marc_record = (
+            self.config.object_type == "Instances"
+            and "source" in existing_record
+            and "MARC" in existing_record.get("source", "")
+        )
+
+        if is_marc_record:
+            # For MARC records, only allow patching specific fields
+            # Filter patch_paths to only include allowed fields
+            allowed_marc_fields = {"discoverySuppress", "staffSuppress", "deleted"}
+            user_patch_paths = set(self.config.patch_paths or [])
+
+            # Only keep suppression/deleted fields from user's patch_paths
+            restricted_paths = [
+                path
+                for path in user_patch_paths
+                if any(allowed.lower() in path.lower() for allowed in allowed_marc_fields)
+            ]
+
+            # Always allow these fields for MARC records
+            restricted_paths.extend(
+                ["statisticalCodeIds", "administrativeNotes", "instanceStatusId"]
+            )
+
+            if self.config.patch_existing_records and user_patch_paths:
+                logger.debug(
+                    "Record %s is MARC-sourced, restricting patch to: %s",
+                    existing_record.get("id", "unknown"),
+                    restricted_paths,
+                )
+
+            self.patch_record(new_record, existing_record, restricted_paths)
+
+        elif self.config.patch_existing_records:
+            # Apply patching with user-specified paths
             self.patch_record(new_record, existing_record, self.config.patch_paths or [])
 
     async def fetch_existing_records(self, record_ids: List[str]) -> Dict[str, dict]:
@@ -516,6 +585,23 @@ class BatchPoster:
 
         return existing_records
 
+    @staticmethod
+    def set_consortium_source(record: dict) -> None:
+        """
+        Convert source field for consortium shadow instances.
+
+        For shadow instances in ECS/consortium environments, the source field
+        must be prefixed with "CONSORTIUM-" to distinguish them from local records.
+
+        Args:
+            record: The record to modify (modified in place)
+        """
+        source = record.get("source", "")
+        if source == "MARC":
+            record["source"] = "CONSORTIUM-MARC"
+        elif source == "FOLIO":
+            record["source"] = "CONSORTIUM-FOLIO"
+
     async def set_versions_for_upsert(self, batch: List[dict]) -> None:
         """
         Fetch existing record versions and prepare batch for upsert.
@@ -557,6 +643,11 @@ class BatchPoster:
         # Track creates vs updates before posting
         num_creates = 0
         num_updates = 0
+
+        # For ShadowInstances, convert source to consortium format
+        if self.config.object_type == "ShadowInstances":
+            for record in batch:
+                self.set_consortium_source(record)
 
         # If upsert mode, set versions and track which are updates
         if self.config.upsert:
@@ -922,6 +1013,116 @@ class BatchPoster:
 
             return self.stats
 
+    async def rerun_failed_records_one_by_one(self) -> None:
+        """
+        Reprocess failed records one at a time.
+
+        Streams through the failed records file, processing each record
+        individually. Records that still fail are written to a new file
+        with '_rerun' suffix. This gives each record a second chance
+        with individual error handling.
+        """
+        if not self._failed_records_path or not self._failed_records_path.exists():
+            logger.warning("No failed records file to rerun")
+            return
+
+        # Close the file handle if we own it
+        if self._owns_file_handle and self._failed_records_file_handle:
+            self._failed_records_file_handle.close()
+            self._failed_records_file_handle = None
+
+        # Count records first for logging
+        record_count = self._count_lines_in_file(self._failed_records_path)
+        if record_count == 0:
+            logger.info("No failed records to rerun")
+            return
+
+        # Create new file for rerun failures with _rerun suffix
+        rerun_failed_path = self._failed_records_path.with_stem(
+            f"{self._failed_records_path.stem}_rerun"
+        )
+
+        logger.info("=" * 60)
+        logger.info("Rerunning %d failed records one at a time...", record_count)
+        logger.info("=" * 60)
+
+        # Stream through failed records and process one at a time
+        rerun_success = 0
+        rerun_failed = 0
+
+        # Wrap in reporter context for progress display
+        with self.reporter:
+            # Start a new progress task for the rerun
+            rerun_task_id = self.reporter.start_task(
+                f"rerun_{self.config.object_type}",
+                total=record_count,
+                description=f"Rerunning failed {self.config.object_type}",
+            )
+
+            with (
+                open(self._failed_records_path, "r", encoding="utf-8") as infile,
+                open(rerun_failed_path, "w", encoding="utf-8") as outfile,
+            ):
+                for line in infile:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning("Could not parse failed record line: %s", line[:100])
+                        outfile.write(line + "\n")
+                        rerun_failed += 1
+                        self.stats.records_failed += 1
+                        self.reporter.update_task(
+                            rerun_task_id,
+                            advance=1,
+                            succeeded=rerun_success,
+                            failed=rerun_failed,
+                        )
+                        continue
+
+                    record_id = record.get("id", "unknown")
+                    try:
+                        await self.post_batch([record])
+                        rerun_success += 1
+                        logger.debug("Rerun success for record %s", record_id)
+                    except Exception as e:
+                        outfile.write(json.dumps(record) + "\n")
+                        rerun_failed += 1
+                        self.stats.records_failed += 1
+                        logger.debug("Rerun failed for record %s: %s", record_id, e)
+
+                    self.reporter.update_task(
+                        rerun_task_id,
+                        advance=1,
+                        succeeded=rerun_success,
+                        failed=rerun_failed,
+                    )
+
+            # Finish the rerun task
+            self.reporter.finish_task(rerun_task_id)
+
+        # Note: records_posted is already updated by post_batch() calls
+        # We only need to track the still-failing count for the rerun phase
+
+        logger.info("Rerun complete: %d succeeded, %d still failing", rerun_success, rerun_failed)
+        if rerun_failed > 0:
+            logger.info("Still-failing records written to: %s", rerun_failed_path)
+        else:
+            # Remove empty rerun file
+            rerun_failed_path.unlink(missing_ok=True)
+
+    def _count_lines_in_file(self, file_path: Path) -> int:
+        """Count non-empty lines in a file."""
+        count = 0
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    count += 1
+        return count
+
     def get_stats(self) -> BatchPosterStats:
         """
         Get current posting statistics.
@@ -1041,7 +1242,7 @@ def main(
         ),
     ] = None,
     object_type: Annotated[
-        Literal["Instances", "Holdings", "Items"] | None,
+        Literal["Instances", "Holdings", "Items", "ShadowInstances"] | None,
         cyclopts.Parameter(group="Job Configuration Parameters"),
     ] = None,
     file_paths: Annotated[
@@ -1097,6 +1298,13 @@ def main(
         Path | None,
         cyclopts.Parameter(group="Job Configuration Parameters"),
     ] = None,
+    rerun_failed_records: Annotated[
+        bool,
+        cyclopts.Parameter(
+            help="After the main run, reprocess failed records one at a time.",
+            group="Job Configuration Parameters",
+        ),
+    ] = False,
     no_progress: Annotated[
         bool,
         cyclopts.Parameter(group="Job Configuration Parameters"),
@@ -1124,6 +1332,7 @@ def main(
         patch_existing_records: Enable selective field patching during upsert.
         patch_paths: Comma-separated list of field paths to patch.
         failed_records_file: Path to file for writing failed records.
+        rerun_failed_records: After the main run, reprocess failed records one at a time.
         no_progress: Disable progress bar display.
     """
     set_up_cli_logging()
@@ -1143,6 +1352,11 @@ def main(
 
     # Parse patch_paths if provided
     patch_paths_list = parse_patch_paths(patch_paths)
+
+    # Validate rerun_failed_records requires failed_records_file
+    if rerun_failed_records and not failed_records_file:
+        logger.critical("--rerun-failed-records requires --failed-records-file to be set")
+        sys.exit(1)
 
     try:
         if config_file:
@@ -1167,6 +1381,7 @@ def main(
                 preserve_item_status=not overwrite_item_status,
                 patch_existing_records=patch_existing_records,
                 patch_paths=patch_paths_list,
+                rerun_failed_records=rerun_failed_records,
                 no_progress=no_progress,
             )
             files_to_process = expanded_file_paths
@@ -1241,6 +1456,11 @@ async def run_batch_poster(
             )
             async with poster:
                 await poster.do_work(files_to_process)
+
+                # If rerun_failed_records is enabled and there are failures, reprocess them
+                if config.rerun_failed_records and poster.stats.records_failed > 0:
+                    await poster.rerun_failed_records_one_by_one()
+
                 log_final_stats(poster)
 
         except Exception as e:
