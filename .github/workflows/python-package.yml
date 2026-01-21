@@ -22,9 +22,6 @@ jobs:
         python-version: ${{ matrix.python-version }}
         enable-cache: true
 
-    - name: Install the project
-      run: uv sync --locked --all-extras --dev
-
     - name: Install project
       run: uv sync --all-extras --dev
 
