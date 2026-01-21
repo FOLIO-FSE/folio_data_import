@@ -578,9 +578,8 @@ class TestRerunFailedRecords:
 
             await poster.rerun_failed_records_one_by_one()
 
-            # 2 succeeded, 1 still failed
+            # 2 succeeded, 1 still failed (rerun failures tracked separately, not in stats)
             assert poster.stats.records_posted == 2
-            assert poster.stats.records_failed == 1
 
             # Rerun file should exist with the still-failing record
             rerun_file = tmp_path / "failed_rerun.jsonl"
@@ -660,8 +659,8 @@ class TestRerunFailedRecords:
             await poster.rerun_failed_records_one_by_one()
 
             # Valid records should be posted, invalid should be in rerun file
+            # (rerun failures tracked separately, not in stats)
             assert poster.stats.records_posted == 2
-            assert poster.stats.records_failed == 1
 
             rerun_file = tmp_path / "failed_rerun.jsonl"
             assert rerun_file.exists()
@@ -752,7 +751,7 @@ class TestSetConsortiumSource:
         """Test that records without source field are not modified."""
         record = {"id": "123", "title": "Test"}
         BatchPoster.set_consortium_source(record)
-        assert "source" not in record or record.get("source") == ""
+        assert "source" not in record
 
     def test_no_conversion_for_empty_source(self):
         """Test that empty source is not modified."""

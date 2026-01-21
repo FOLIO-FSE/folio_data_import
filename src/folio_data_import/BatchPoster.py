@@ -513,7 +513,7 @@ class BatchPoster:
             restricted_paths = [
                 path
                 for path in user_patch_paths
-                if any(allowed.lower() in path.lower() for allowed in allowed_marc_fields)
+                if any(allowed.lower() == path.lower() for allowed in allowed_marc_fields)
             ]
 
             # Always allow these fields for MARC records
@@ -1074,7 +1074,6 @@ class BatchPoster:
                         logger.warning("Could not parse failed record line: %s", line[:100])
                         outfile.write(line + "\n")
                         rerun_failed += 1
-                        self.stats.records_failed += 1
                         self.reporter.update_task(
                             rerun_task_id,
                             advance=1,
@@ -1091,7 +1090,7 @@ class BatchPoster:
                     except Exception as e:
                         outfile.write(json.dumps(record) + "\n")
                         rerun_failed += 1
-                        self.stats.records_failed += 1
+
                         logger.debug("Rerun failed for record %s: %s", record_id, e)
 
                     self.reporter.update_task(
