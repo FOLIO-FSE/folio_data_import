@@ -1114,13 +1114,9 @@ class BatchPoster:
             rerun_failed_path.unlink(missing_ok=True)
 
     def _count_lines_in_file(self, file_path: Path) -> int:
-        """Count non-empty lines in a file."""
-        count = 0
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    count += 1
-        return count
+        """Count lines in a file using efficient binary newline counting."""
+        with open(file_path, "rb") as f:
+            return sum(buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b""))
 
     def get_stats(self) -> BatchPosterStats:
         """
