@@ -15,19 +15,18 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
       with:
         python-version: ${{ matrix.python-version }}
-        cache: pip
-        cache-dependency-path: '**/pyproject.toml'
-    - name: Install poetry
-      run: |
-        python -m pip install poetry
-    - name: Install project with dependencies
-      run: |
-        poetry install --with dev        
+        enable-cache: true
+
+    - name: Install the project
+      run: uv sync --locked --all-extras --dev
+
+    - name: Install project
+      run: uv sync --locked --all-extras --dev
+
     - name: Run tests
-      run: |
-        poetry run pytest
+      run: uv run pytest tests/
