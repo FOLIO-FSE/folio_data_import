@@ -488,11 +488,12 @@ class TestRerunFailedRecords:
 
     @pytest.mark.asyncio
     async def test_rerun_no_failed_records_file(self, config, mock_folio_client):
-        """Test rerun with no failed records file configured."""
+        """Test rerun with no failed records file configured.
+        
+        Should log warning and return without error - no assertions needed.
+        """
         async with BatchPoster(mock_folio_client, config) as poster:
-            # Should log warning and return without error
             await poster.rerun_failed_records_one_by_one()
-            # No assertions needed - just verify it doesn't crash
 
     @pytest.mark.asyncio
     async def test_rerun_empty_failed_records_file(
