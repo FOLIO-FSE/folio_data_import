@@ -21,6 +21,7 @@ Batch Poster works exclusively with FOLIO Inventory storage records:
 | `Instances` | `/instance-storage/batch/synchronous` | Bibliographic records |
 | `Holdings` | `/holdings-storage/batch/synchronous` | Holdings records |
 | `Items` | `/item-storage/batch/synchronous` | Item records |
+| `ShadowInstances` | `/instance-storage/batch/synchronous` | Consortium shadow instances (ECS) |
 
 ```{note}
 For other data types, use the appropriate tool:
@@ -69,11 +70,12 @@ folio-data-import batch-poster \
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--object-type` | (required) | Record type: `Instances`, `Holdings`, or `Items` |
+| `--object-type` | (required) | Record type: `Instances`, `Holdings`, `Items`, or `ShadowInstances` |
 | `--file-path` | (required) | Path(s) to JSONL file(s). Accepts multiple values and glob patterns |
 | `--batch-size` | 100 | Number of records per batch (1-1000) |
 | `--upsert` | false | Enable upsert mode to update existing records |
 | `--failed-records-file` | none | Path to file for writing failed records |
+| `--rerun-failed-records` | false | After main run, reprocess failed records one at a time |
 | `--no-progress` | false | Disable progress bar display |
 
 #### Upsert Options
@@ -182,6 +184,40 @@ folio-data-import batch-poster \
 ```
 
 This updates **only** `barcode` and `materialTypeId` from your input file while preserving all other fields from the existing record.
+
+## Protected Fields
+
+### Always-Preserved Fields
+
+Certain fields are **always preserved** from existing records during upsert, regardless of configuration:
+
+| Field | Applies To | Reason |
+|-------|------------|--------|
+| `hrid` | All record types | Human-readable ID - changing it breaks external references |
+| `lastCheckIn` | Items | Circulation data - should not be overwritten by migrations |
+
+These fields cannot be overwritten through upsert operations. If you need to change an `hrid`, you must delete and recreate the record.
+
+### MARC-Sourced Instance Protection
+
+When updating Instance records that have a MARC source (i.e., `source` contains "MARC"), Batch Poster automatically restricts which fields can be patched. This protects MARC-managed fields from being overwritten, as they would be reverted on the next SRS update anyway.
+
+**Allowed fields for MARC-sourced Instances:**
+
+| Field | Purpose |
+|-------|---------|
+| `discoverySuppress` | Discovery suppression flag |
+| `staffSuppress` | Staff suppression flag |
+| `deleted` | Deletion flag |
+| `statisticalCodeIds` | Statistical codes (merged with existing) |
+| `administrativeNotes` | Administrative notes (merged with existing) |
+| `instanceStatusId` | Instance status |
+
+**Example:** If you try to update the `title` of a MARC-sourced Instance, that change will be ignored to protect the MARC-managed data.
+
+```{note}
+This protection is automatic. You don't need to configure anything - MARC-sourced records are detected and handled appropriately.
+```
 
 ## Multiple Files
 
@@ -306,6 +342,49 @@ folio-data-import batch-poster \
   --upsert \
   --patch-existing-records \
   --patch-paths "barcode"
+```
+
+### Rerun Failed Records
+
+When a batch fails, some records in that batch may have succeeded individually. The `--rerun-failed-records` flag automatically reprocesses failed records one at a time after the main run completes, giving each record a second chance:
+
+```bash
+folio-data-import batch-poster \
+  --object-type Items \
+  --file-path items.jsonl \
+  --upsert \
+  --failed-records-file failed_items.jsonl \
+  --rerun-failed-records
+```
+
+This will:
+1. Process all records in batches (normal operation)
+2. If any batches fail, reprocess those failed records individually
+3. Write still-failing records to a new file with `_rerun` suffix (e.g., `failed_items_rerun.jsonl`)
+
+The original failed records file is preserved, and the rerun processes records in a streaming fashion without loading them all into memory.
+
+```{note}
+`--rerun-failed-records` requires `--failed-records-file` to be set.
+```
+
+### Consortium Shadow Instances (ECS)
+
+For FOLIO ECS (consortium) environments, use `ShadowInstances` to post shadow copies to member tenants. This automatically converts the `source` field:
+
+- `MARC` → `CONSORTIUM-MARC`
+- `FOLIO` → `CONSORTIUM-FOLIO`
+
+```bash
+folio-data-import batch-poster \
+  --gateway-url https://folio-snapshot-okapi.dev.folio.org \
+  --tenant-id central \
+  --member-tenant-id member1 \
+  --username admin \
+  --password admin \
+  --object-type ShadowInstances \
+  --file-path instances.jsonl \
+  --upsert
 ```
 
 ## Environment Variables

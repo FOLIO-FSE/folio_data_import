@@ -133,6 +133,7 @@ Batch Poster works with FOLIO Inventory storage records:
 - **Instances**: Bibliographic records
 - **Holdings**: Holdings records attached to instances
 - **Items**: Item records attached to holdings
+- **ShadowInstances**: Consortium shadow copies (ECS environments)
 
 ### Input Format
 
@@ -171,6 +172,22 @@ When updating existing records, you can preserve specific data:
 - `--preserve-temporary-loan-types`: Keep existing temporary loan type (Items only)
 - Item status is **preserved by default**; use `--overwrite-item-status` to change
 
+### Always-Protected Fields
+
+Certain fields are **always preserved** from existing records, regardless of configuration:
+
+- `hrid` (human-readable ID): Changing it would break external references
+- `lastCheckIn` (Items only): Circulation data that should not be overwritten
+
+### MARC Source Protection
+
+For Instance records with a MARC source (e.g., `source: "MARC"` or `source: "CONSORTIUM-MARC"`), Batch Poster automatically restricts patching to only these fields:
+
+- `discoverySuppress`, `staffSuppress`, `deleted` (suppression flags)
+- `statisticalCodeIds`, `administrativeNotes`, `instanceStatusId`
+
+This prevents overwriting MARC-managed fields like title or contributors, which would be reverted on the next SRS update anyway.
+
 ### Selective Patching
 
 For fine-grained updates, use `--patch-existing-records` with `--patch-paths`:
@@ -180,6 +197,27 @@ For fine-grained updates, use `--patch-existing-records` with `--patch-paths`:
 ```
 
 This updates only the specified fields while preserving all others from the existing record.
+
+### Consortium Shadow Instances
+
+For FOLIO ECS (consortium) environments, use `--object-type ShadowInstances` to post shadow copies to member tenants. This automatically converts the `source` field to consortium format:
+
+- `MARC` → `CONSORTIUM-MARC`
+- `FOLIO` → `CONSORTIUM-FOLIO`
+
+Use `--member-tenant-id` to specify the target member tenant.
+
+### Rerunning Failed Records
+
+When `--rerun-failed-records` is enabled (along with `--failed-records-file`), the tool automatically reprocesses any failed records one at a time after the main batch run completes:
+
+```bash
+folio-data-import batch-poster --object-type Items \
+  --file-path items.jsonl --upsert \
+  --failed-records-file failed.jsonl --rerun-failed-records
+```
+
+This streams through the failed records file, giving each record an individual retry. Records that still fail are written to a new file with `_rerun` suffix (e.g., `failed_rerun.jsonl`).
 
 ### Workflow
 
