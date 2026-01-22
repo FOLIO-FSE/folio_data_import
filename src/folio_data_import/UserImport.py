@@ -6,10 +6,10 @@ import logging
 import sys
 import time
 import uuid
-from io import TextIOWrapper
 from datetime import datetime as dt
+from io import TextIOWrapper
 from pathlib import Path
-from typing import List, Literal, Tuple, Annotated
+from typing import Annotated, List, Literal, Tuple
 
 import aiofiles
 import cyclopts
@@ -17,13 +17,12 @@ import folioclient
 import httpx
 from aiofiles.threadpool.text import AsyncTextIOWrapper
 from pydantic import BaseModel, Field
-from rich.logging import RichHandler
 
-from folio_data_import import get_folio_connection_parameters
+from folio_data_import import get_folio_connection_parameters, set_up_cli_logging
 from folio_data_import._progress import (
-    RichProgressReporter,
-    ProgressReporter,
     NoOpProgressReporter,
+    ProgressReporter,
+    RichProgressReporter,
 )
 
 try:
@@ -1022,40 +1021,6 @@ class UserImporter:  # noqa: R0902
         return self.stats
 
 
-def set_up_cli_logging() -> None:
-    """
-    This function sets up logging for the CLI.
-    """
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-
-    # Set up file and stream handlers
-    file_handler = logging.FileHandler(
-        "folio_user_import_{}.log".format(dt.now().strftime("%Y%m%d%H%M%S"))
-    )
-    file_handler.setLevel(logging.INFO)
-    file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-
-    if not any(
-        isinstance(h, logging.StreamHandler) and h.stream == sys.stderr for h in logger.handlers
-    ):
-        stream_handler = RichHandler(
-            show_level=False,
-            show_time=False,
-            omit_repeated_times=False,
-            show_path=False,
-        )
-        stream_handler.setLevel(logging.WARNING)
-        stream_formatter = logging.Formatter("%(message)s")
-        stream_handler.setFormatter(stream_formatter)
-        logger.addHandler(stream_handler)
-
-    # Stop httpx from logging info messages to the console
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
 app = cyclopts.App()
 
 
@@ -1153,6 +1118,12 @@ def main(
         cyclopts.Parameter(group="Job Configuration Parameters"),
     ] = "email",
     no_progress: Annotated[bool, cyclopts.Parameter(group="Job Configuration Parameters")] = False,
+    debug: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=["--debug"], group="General Parameters", help="Enable debug logging"
+        ),
+    ] = False,
 ) -> None:
     """
     Command-line interface to batch import users into FOLIO
@@ -1175,8 +1146,9 @@ def main(
         user_match_key (str): The key to match users (externalSystemId, username, barcode).
         default_preferred_contact_type (str): The default preferred contact type for users
         no_progress (bool): Whether to disable the progress bar.
+        debug (bool): Enable debug logging.
     """  # noqa: E501
-    set_up_cli_logging()
+    set_up_cli_logging(logger, "folio_user_import", debug, stream_level=logging.WARNING)
     fields_to_protect = fields_to_protect or ""
     protect_fields = [f.strip() for f in fields_to_protect.split(",") if f.strip()]
 

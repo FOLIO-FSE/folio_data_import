@@ -10,23 +10,21 @@ import glob as glob_module
 import json
 import logging
 import sys
-from datetime import datetime as dt
 from io import TextIOWrapper
 from pathlib import Path
 from typing import Annotated, Any, Dict, Generator, List, Literal, Union
 
 import cyclopts
 import folioclient
-from folioclient import FolioClient
 import httpx
+from folioclient import FolioClient
 from pydantic import BaseModel, Field
-from rich.logging import RichHandler
 
-from folio_data_import import get_folio_connection_parameters
+from folio_data_import import get_folio_connection_parameters, set_up_cli_logging
 from folio_data_import._progress import (
-    RichProgressReporter,
-    ProgressReporter,
     NoOpProgressReporter,
+    ProgressReporter,
+    RichProgressReporter,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +40,8 @@ class BatchPosterStats(BaseModel):
     records_failed: int = 0
     batches_posted: int = 0
     batches_failed: int = 0
+    rerun_succeeded: int = 0
+    rerun_still_failed: int = 0
 
 
 def get_api_info(object_type: str) -> Dict[str, Any]:
@@ -1103,8 +1103,9 @@ class BatchPoster:
             # Finish the rerun task
             self.reporter.finish_task(rerun_task_id)
 
-        # Note: records_posted is already updated by post_batch() calls
-        # We only need to track the still-failing count for the rerun phase
+        # Store rerun results in stats for final reporting
+        self.stats.rerun_succeeded = rerun_success
+        self.stats.rerun_still_failed = rerun_failed
 
         logger.info("Rerun complete: %d succeeded, %d still failing", rerun_success, rerun_failed)
         if rerun_failed > 0:
@@ -1156,41 +1157,6 @@ def get_req_size(response: httpx.Response):
     size += "\r\n".join(f"{k}{v}" for k, v in response.request.headers.items())
     size += response.request.content.decode("utf-8") or ""
     return get_human_readable_size(len(size.encode("utf-8")))
-
-
-def set_up_cli_logging() -> None:
-    """
-    This function sets up logging for the CLI.
-    """
-
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-
-    # Set up file and stream handlers
-    file_handler = logging.FileHandler(
-        "folio_batch_poster_{}.log".format(dt.now().strftime("%Y%m%d%H%M%S"))
-    )
-    file_handler.setLevel(logging.INFO)
-    file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-
-    if not any(
-        isinstance(h, logging.StreamHandler) and h.stream == sys.stderr for h in logger.handlers
-    ):
-        stream_handler = RichHandler(
-            show_level=False,
-            show_time=False,
-            omit_repeated_times=False,
-            show_path=False,
-        )
-        stream_handler.setLevel(logging.INFO)
-        stream_formatter = logging.Formatter("%(message)s")
-        stream_handler.setFormatter(stream_formatter)
-        logger.addHandler(stream_handler)
-
-    # Stop httpx from logging info messages to the console
-    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 app = cyclopts.App(default_parameter=cyclopts.Parameter(negative=()))
@@ -1304,6 +1270,12 @@ def main(
         bool,
         cyclopts.Parameter(group="Job Configuration Parameters"),
     ] = False,
+    debug: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=["--debug"], group="General Parameters", help="Enable debug logging"
+        ),
+    ] = False,
 ) -> None:
     """
     Command-line interface to batch post inventory records to FOLIO
@@ -1329,8 +1301,9 @@ def main(
         failed_records_file: Path to file for writing failed records.
         rerun_failed_records: After the main run, reprocess failed records one at a time.
         no_progress: Disable progress bar display.
+        debug: Enable debug logging.
     """
-    set_up_cli_logging()
+    set_up_cli_logging(logger, "folio_batch_poster", debug)
 
     gateway_url, tenant_id, username, password = get_folio_connection_parameters(
         gateway_url, tenant_id, username, password
@@ -1482,6 +1455,9 @@ def log_final_stats(poster: BatchPoster) -> None:
     logger.info("Records failed: %d", poster.stats.records_failed)
     logger.info("Total batches posted: %d", poster.stats.batches_posted)
     logger.info("Total batches failed: %d", poster.stats.batches_failed)
+    if poster.config.rerun_failed_records:
+        logger.info("Rerun succeeded: %d", poster.stats.rerun_succeeded)
+        logger.info("Rerun still failed: %d", poster.stats.rerun_still_failed)
     if poster._failed_records_path:
         logger.info("Failed records written to: %s", poster._failed_records_path)
 
