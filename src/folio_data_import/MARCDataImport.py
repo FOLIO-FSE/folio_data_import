@@ -23,10 +23,13 @@ import questionary
 import tabulate
 from humps import decamelize
 from pydantic import BaseModel, Field
-from rich.logging import RichHandler
 
 from folio_data_import import __version__ as app_version
-from folio_data_import import get_folio_connection_parameters
+from folio_data_import import (
+    CustomLogger,
+    get_folio_connection_parameters,
+    set_up_cli_logging,
+)
 from folio_data_import._progress import (
     NoOpProgressReporter,
     ProgressReporter,
@@ -52,10 +55,6 @@ RETRY_TIMEOUT_START = 5
 RETRY_TIMEOUT_RETRY_FACTOR = 1.5
 RETRY_TIMEOUT_MAX = 25.32
 
-# Custom log level for data issues, set to 26
-DATA_ISSUE_LVL_NUM = 26
-logging.addLevelName(DATA_ISSUE_LVL_NUM, "DATA_ISSUES")
-
 
 class MARCImportStats(BaseModel):
     """Statistics for MARC import operations."""
@@ -67,18 +66,6 @@ class MARCImportStats(BaseModel):
     discarded: int = 0
     error: int = 0
 
-
-class CustomLogger(logging.Logger):
-    """Logger subclass with custom data_issues method."""
-
-    def data_issues(self, msg: str, *args, **kws) -> None:
-        """Log data issues at custom level (26)."""
-        if self.isEnabledFor(DATA_ISSUE_LVL_NUM):
-            self._log(DATA_ISSUE_LVL_NUM, msg, args, **kws)
-
-
-# Set the custom logger class as the default
-logging.setLoggerClass(CustomLogger)
 
 logger: CustomLogger = logging.getLogger(__name__)  # type: ignore[assignment]
 
@@ -966,54 +953,6 @@ class MARCImportJob:
         return job_summary
 
 
-def set_up_cli_logging() -> None:
-    """
-    This function sets up logging for the CLI.
-    """
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-
-    # Set up file and stream handlers
-    file_handler = logging.FileHandler(
-        "folio_data_import_{}.log".format(dt.now().strftime("%Y%m%d%H%M%S"))
-    )
-    file_handler.setLevel(logging.INFO)
-    file_handler.addFilter(ExcludeLevelFilter(DATA_ISSUE_LVL_NUM))
-    # file_handler.addFilter(IncludeLevelFilter(25))
-    file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-
-    if not any(
-        isinstance(h, logging.StreamHandler) and h.stream == sys.stderr for h in logger.handlers
-    ):
-        stream_handler = RichHandler(
-            show_level=False,
-            show_time=False,
-            omit_repeated_times=False,
-            show_path=False,
-        )
-        stream_handler.setLevel(logging.INFO)
-        stream_handler.addFilter(ExcludeLevelFilter(DATA_ISSUE_LVL_NUM))
-        # stream_handler.addFilter(ExcludeLevelFilter(25))
-        stream_formatter = logging.Formatter("%(message)s")
-        stream_handler.setFormatter(stream_formatter)
-        logger.addHandler(stream_handler)
-
-    # Set up data issues logging
-    data_issues_handler = logging.FileHandler(
-        "marc_import_data_issues_{}.log".format(dt.now().strftime("%Y%m%d%H%M%S"))
-    )
-    data_issues_handler.setLevel(26)
-    data_issues_handler.addFilter(IncludeLevelFilter(DATA_ISSUE_LVL_NUM))
-    data_issues_formatter = logging.Formatter("%(message)s")
-    data_issues_handler.setFormatter(data_issues_formatter)
-    logger.addHandler(data_issues_handler)
-
-    # Stop httpx from logging info messages to the console
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-
-
 app = cyclopts.App(version=app_version)
 
 
@@ -1104,6 +1043,12 @@ def main(
     job_ids_file_path: Annotated[
         str | None, cyclopts.Parameter(group="Job Configuration Parameters")
     ] = None,
+    debug: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=["--debug"], group="General Parameters", help="Enable debug logging"
+        ),
+    ] = False,
 ) -> None:
     """
     Command-line interface to batch import MARC records into FOLIO using FOLIO Data Import
@@ -1130,8 +1075,9 @@ def main(
         let_summary_fail (bool): Let the final summary check fail without exiting.
         preprocessor_config (str): Path to JSON config file for the preprocessor.
         job_ids_file_path (str): Path to file to write job IDs to.
+        debug (bool): Enable debug logging.
     """  # noqa: E501
-    set_up_cli_logging()
+    set_up_cli_logging(logger, "folio_marc_data_import", debug, True)
     gateway_url, tenant_id, username, password = get_folio_connection_parameters(
         gateway_url, tenant_id, username, password
     )
@@ -1255,24 +1201,6 @@ async def run_job(job: MARCImportJob):
     finally:
         if job:
             await job.wrap_up()
-
-
-class ExcludeLevelFilter(logging.Filter):
-    def __init__(self, level) -> None:
-        super().__init__()
-        self.level = level
-
-    def filter(self, record):
-        return record.levelno != self.level
-
-
-class IncludeLevelFilter(logging.Filter):
-    def __init__(self, level) -> None:
-        super().__init__()
-        self.level = level
-
-    def filter(self, record):
-        return record.levelno == self.level
 
 
 if __name__ == "__main__":
