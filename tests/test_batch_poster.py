@@ -581,6 +581,9 @@ class TestRerunFailedRecords:
 
             # 2 succeeded, 1 still failed (rerun failures tracked separately, not in stats)
             assert poster.stats.records_posted == 2
+            # Verify rerun stats are populated for final reporting
+            assert poster.stats.rerun_succeeded == 2
+            assert poster.stats.rerun_still_failed == 1
 
             # Rerun file should exist with the still-failing record
             rerun_file = tmp_path / "failed_rerun.jsonl"
