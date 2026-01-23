@@ -508,6 +508,19 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
     return record
 
 
+def mark_deleted(record: Record, **kwargs) -> Record:
+    """
+    Mark the record as deleted by setting the record status to 'd'.
+
+    Args:
+        record (Record): The MARC record to preprocess.
+    Returns:
+        Record: The preprocessed MARC record.
+    """
+    record.leader = pymarc.Leader(record.leader[:5] + "d" + record.leader[6:])
+    return record
+
+
 def ordinal(n: int) -> str:
     s = ("th", "st", "nd", "rd") + ("th",) * 10
     v = n % 100
