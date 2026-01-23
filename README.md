@@ -428,9 +428,7 @@ asyncio.run(import_marc())
 
 ### Additional Documentation
 
-For complete API documentation and advanced usage:
-- [BatchPoster.md](docs/BatchPoster.md) - Comprehensive BatchPoster guide
-- [BatchPoster_Quick_Reference.md](docs/BatchPoster_Quick_Reference.md) - Quick reference
+For complete API documentation and advanced usage, [visit our full documentation](https://folio-data-import.readthedocs.io/en/latest/).
 
 ## Contributing
 
