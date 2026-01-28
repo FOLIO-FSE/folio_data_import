@@ -9,6 +9,7 @@ import asyncio
 import glob as glob_module
 import json
 import logging
+import os
 import sys
 from io import TextIOWrapper
 from pathlib import Path
@@ -306,6 +307,10 @@ class BatchPoster:
         if config.upsert and not self.api_info["supports_upsert"]:
             raise ValueError(f"Upsert is not supported for {config.object_type}")
 
+        self.semaphore = asyncio.Semaphore(
+            int(os.environ.get("FOLIO_MAX_CONCURRENT_REQUESTS", 10))
+        )  # Limit concurrent requests
+
     async def __aenter__(self):
         """Async context manager entry."""
         # Open the file if we own it and it's not already open
@@ -555,9 +560,10 @@ class BatchPoster:
             query = f"id==({' OR '.join(batch_ids)})"
             params = {"query": query, "limit": fetch_batch_size}
             try:
-                return await self.folio_client.folio_get_async(
-                    query_endpoint, key=object_name, query_params=params
-                )
+                async with self.semaphore:
+                    return await self.folio_client.folio_get_async(
+                        query_endpoint, key=object_name, query_params=params
+                    )
             except folioclient.FolioClientError as e:
                 logger.error(f"FOLIO client error fetching existing records: {e}")
                 raise
