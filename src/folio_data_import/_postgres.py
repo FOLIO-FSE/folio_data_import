@@ -1,3 +1,4 @@
+import logging
 import socket
 import subprocess
 import time
@@ -15,6 +16,10 @@ except ImportError:
     psycopg2 = None  # type: ignore[assignment]
     RealDictCursor = None  # type: ignore[assignment]
     POSTGRES_AVAILABLE = False
+
+
+logger = logging.getLogger(__name__)
+
 
 POSTGRES_INSTALL_MESSAGE = (
     "PostgreSQL support requires the 'postgres' optional dependencies.\n"
@@ -149,7 +154,7 @@ def db_session(
                 pg_cfg = db_config.model_copy()
                 pg_cfg.host = "127.0.0.1"
                 pg_cfg.port = local_port
-                print("Tunnel listening on port", local_port)
+                logger.info("Tunnel listening on port %s", local_port)
 
                 conn = connect_postgres(pg_cfg)
                 yield conn
