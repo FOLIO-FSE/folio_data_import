@@ -284,7 +284,15 @@ class BatchPoster:
         """
         self.folio_client = folio_client
         self.config = config
-        self.reporter = reporter or NoOpProgressReporter()
+        # Create reporter from config if not provided
+        if reporter is None:
+            self.reporter = (
+                NoOpProgressReporter()
+                if config.no_progress
+                else RichProgressReporter(show_speed=True, show_time=True)
+            )
+        else:
+            self.reporter = reporter
         self.api_info = get_api_info(config.object_type)
         self.stats = BatchPosterStats()
 
@@ -1418,16 +1426,7 @@ async def run_batch_poster(
     """
     async with folio_client:
         try:
-            # Create progress reporter
-            reporter = (
-                NoOpProgressReporter()
-                if config.no_progress
-                else RichProgressReporter(show_speed=True, show_time=True)
-            )
-
-            poster = BatchPoster(
-                folio_client, config, failed_records_file=failed_records_file, reporter=reporter
-            )
+            poster = BatchPoster(folio_client, config, failed_records_file=failed_records_file)
             async with poster:
                 await poster.do_work(files_to_process)
 
