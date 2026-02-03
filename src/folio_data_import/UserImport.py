@@ -156,7 +156,15 @@ class UserImporter:  # noqa: R0902
     ) -> None:
         self.config = config
         self.folio_client: folioclient.FolioClient = folio_client
-        self.reporter = reporter or NoOpProgressReporter()
+        # Create reporter from config if not provided
+        if reporter is None:
+            self.reporter = (
+                NoOpProgressReporter()
+                if config.no_progress
+                else RichProgressReporter(show_speed=True, show_time=True)
+            )
+        else:
+            self.reporter = reporter
         self.limit_simultaneous_requests = asyncio.Semaphore(config.limit_simultaneous_requests)
         # Build reference data maps (these need processing)
         self.patron_group_map: dict = self.build_ref_data_id_map(
@@ -1161,16 +1169,47 @@ def main(
     if member_tenant_id:
         folio_client.tenant_id = member_tenant_id
 
-    if not library_name:
-        raise ValueError("library_name is required")
+    report_file_base_path = report_file_base_path or Path.cwd()
+    error_file_path = (
+        report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
+    )
 
-    if not user_file_paths:
-        raise ValueError(
-            "You must provide at least one user file path using --user-file-paths or "
-            "--user-file-path."
+    config_data = {}
+    if config_file:
+        try:
+            with open(config_file, "r") as f:
+                config_data = json.load(f)
+                config = UserImporter.Config(**config_data)
+        except Exception as e:
+            logger.critical(f"Failed to load configuration file {config_file}: {e}")
+            sys.exit(1)
+    else:
+        # Expand any glob patterns in file paths
+        expanded_paths = pathify_user_file_paths(user_file_paths)
+
+        # Convert to single Path or List[Path] for Config
+        file_paths_list = expanded_paths if len(expanded_paths) > 1 else expanded_paths[0]
+
+        config = UserImporter.Config(
+            library_name=library_name,
+            batch_size=batch_size,
+            user_match_key=user_match_key,
+            only_update_present_fields=update_only_present_fields,
+            default_preferred_contact_type=default_preferred_contact_type,
+            fields_to_protect=protect_fields,
+            limit_simultaneous_requests=limit_async_requests,
+            user_file_paths=file_paths_list,
+            no_progress=no_progress,
         )
+    try:
+        importer = UserImporter(folio_client, config)
+        asyncio.run(run_user_importer(importer, error_file_path))
+    except Exception as ee:
+        logger.critical(f"An unknown error occurred: {ee}")
+        sys.exit(1)
 
-    # Expand any glob patterns in file paths
+
+def pathify_user_file_paths(user_file_paths):
     expanded_paths = []
     for path_arg in user_file_paths:
         path_str = str(path_arg)
@@ -1185,45 +1224,7 @@ def main(
                 expanded_paths.append(path_arg)
         else:
             expanded_paths.append(path_arg)
-
-    # Convert to single Path or List[Path] for Config
-    file_paths_list = expanded_paths if len(expanded_paths) > 1 else expanded_paths[0]
-
-    report_file_base_path = report_file_base_path or Path.cwd()
-    error_file_path = (
-        report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
-    )
-    try:
-        # Create UserImporter.Config object
-        if config_file:
-            with open(config_file, "r") as f:
-                config_data = json.load(f)
-                config = UserImporter.Config(**config_data)
-        else:
-            config = UserImporter.Config(
-                library_name=library_name,
-                batch_size=batch_size,
-                user_match_key=user_match_key,
-                only_update_present_fields=update_only_present_fields,
-                default_preferred_contact_type=default_preferred_contact_type,
-                fields_to_protect=protect_fields,
-                limit_simultaneous_requests=limit_async_requests,
-                user_file_paths=file_paths_list,
-                no_progress=no_progress,
-            )
-
-        # Create progress reporter
-        reporter = (
-            NoOpProgressReporter()
-            if no_progress
-            else RichProgressReporter(show_speed=True, show_time=True)
-        )
-
-        importer = UserImporter(folio_client, config, reporter)
-        asyncio.run(run_user_importer(importer, error_file_path))
-    except Exception as ee:
-        logger.critical(f"An unknown error occurred: {ee}")
-        sys.exit(1)
+    return expanded_paths
 
 
 async def run_user_importer(importer: UserImporter, error_file_path: Path):

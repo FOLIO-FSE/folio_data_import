@@ -234,7 +234,15 @@ class MARCImportJob:
     ) -> None:
         self.folio_client: folioclient.FolioClient = folio_client
         self.config = config
-        self.reporter = reporter or NoOpProgressReporter()
+        # Create reporter from config if not provided
+        if reporter is None:
+            self.reporter = (
+                NoOpProgressReporter()
+                if config.no_progress
+                else RichProgressReporter(show_speed=True, show_time=True)
+            )
+        else:
+            self.reporter = reporter
         self.current_retry_timeout: float | None = None
         self.marc_record_preprocessor: MARCPreprocessor = MARCPreprocessor(
             config.marc_record_preprocessors or "", **(config.preprocessors_args or {})
@@ -1086,58 +1094,54 @@ def main(
     if member_tenant_id:
         folio_client.tenant_id = member_tenant_id
 
-    # Handle file path expansion
-    marc_files = collect_marc_file_paths(marc_file_paths)
-
-    marc_files.sort()
-
-    if len(marc_files) == 0:
-        logger.critical(f"No files found matching {marc_file_paths}. Exiting.")
-        sys.exit(1)
-    else:
-        logger.info(marc_files)
-
-    if preprocessors_config:
-        with open(preprocessors_config, "r") as f:
-            preprocessor_args = json.load(f)
-    else:
-        preprocessor_args = {}
-
-    if not import_profile_name:
-        import_profile_name = select_import_profile(folio_client)
-
-    job = None
-    try:
-        if config_file:
+    if config_file:
+        # Load configuration from file
+        try:
             with open(config_file, "r") as f:
                 config_data = json.load(f)
             config = MARCImportJob.Config(**config_data)
-        else:
-            config = MARCImportJob.Config(
-                marc_files=marc_files,
-                import_profile_name=import_profile_name,
-                batch_size=batch_size,
-                batch_delay=batch_delay,
-                marc_record_preprocessors=preprocessors,
-                preprocessors_args=preprocessor_args,
-                no_progress=no_progress,
-                no_summary=no_summary,
-                let_summary_fail=let_summary_fail,
-                split_files=split_files,
-                split_size=split_size,
-                split_offset=split_offset,
-                job_ids_file_path=Path(job_ids_file_path) if job_ids_file_path else None,
-                show_file_names_in_data_import_logs=file_names_in_di_logs,
-            )
+        except Exception as e:
+            logger.critical(f"Failed to load configuration file {config_file}: {e}")
+            sys.exit(1)
+    else:
+        # Handle file path expansion for CLI invocation
+        marc_files = collect_marc_file_paths(marc_file_paths)
+        marc_files.sort()
 
-        # Create progress reporter
-        reporter = (
-            NoOpProgressReporter()
-            if no_progress
-            else RichProgressReporter(show_speed=True, show_time=True)
+        if len(marc_files) == 0:
+            logger.critical(f"No files found matching {marc_file_paths}. Exiting.")
+            sys.exit(1)
+        else:
+            logger.info(marc_files)
+
+        if preprocessors_config:
+            with open(preprocessors_config, "r") as f:
+                preprocessor_args = json.load(f)
+        else:
+            preprocessor_args = {}
+
+        if not import_profile_name:
+            import_profile_name = select_import_profile(folio_client)
+
+        config = MARCImportJob.Config(
+            marc_files=marc_files,
+            import_profile_name=import_profile_name,
+            batch_size=batch_size,
+            batch_delay=batch_delay,
+            marc_record_preprocessors=preprocessors,
+            preprocessors_args=preprocessor_args,
+            no_progress=no_progress,
+            no_summary=no_summary,
+            let_summary_fail=let_summary_fail,
+            split_files=split_files,
+            split_size=split_size,
+            split_offset=split_offset,
+            job_ids_file_path=Path(job_ids_file_path) if job_ids_file_path else None,
+            show_file_names_in_data_import_logs=file_names_in_di_logs,
         )
 
-        job = MARCImportJob(folio_client, config, reporter)
+    try:
+        job = MARCImportJob(folio_client, config)
         asyncio.run(run_job(job))
     except Exception as e:
         logger.error("Could not initialize MARCImportJob: " + str(e))
