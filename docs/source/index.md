@@ -15,6 +15,7 @@ batch_poster_guide.md
 user_import_guide.md
 marc_data_import_guide.md
 marc_preprocessors.md
+di_log_retriever_guide.md
 examples.md
 troubleshooting.md
 ```
@@ -41,6 +42,7 @@ A Python toolkit for bulk importing data into a FOLIO LSP environment. Currently
 - **MARC records** - Import bibliographic and holdings MARC records
 - **User/patron data** - Load user records from JSON Lines format
 - **Batch operations** - Post data to FOLIO using the API
+- **Data Import diagnostics** - Retrieve error logs and failed MARC records from Data Import jobs
 
 ## What does it do?
 
@@ -51,6 +53,7 @@ FOLIO Data Import provides utilities and tools to help with initial data migrati
 - **MARC Import** - Load batches of MARC records via FOLIO's Data Import system using change-manager APIs
 - **User Import** - An alternative to FOLIO's own `user-import` API that offers more robust record handling and extended functionality (field protection, service point assignment, etc.)
 - **Batch Posting** - Efficiently post Inventory records to FOLIO using batch APIs
+- **DI Log Retrieval** - Extract error logs and failed MARC records from Data Import jobs for analysis
 - **Progress Tracking** - Real-time progress reporting with Redis support
 - **Error Reporting** - Detailed error logs and failed record tracking
 - **Flexible Configuration** - JSON configuration files for all tools

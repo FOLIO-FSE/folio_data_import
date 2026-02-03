@@ -395,6 +395,7 @@ folio-data-import marc --marc-file-path records.mrc
 - [Quick Start](quick_start.md)
 - [Core Concepts](concepts.md)
 - [MARC Preprocessors](marc_preprocessors.md)
+- [DI Log Retriever](di_log_retriever_guide.md) - Retrieve error logs and failed MARC records from Data Import jobs
 - [Examples](examples.md)
 - [Troubleshooting](troubleshooting.md)
 - [FOLIO Data Import Documentation](https://docs.folio.org/docs/metadata/dataimport/)
