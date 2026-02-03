@@ -523,18 +523,23 @@ def mark_deleted(record: Record, **kwargs) -> Record:
 
 def remove_non_numeric_fields(record: Record, **kwargs) -> Record:
     """
-    Remove all fields from the record that do not only character 0-9. Also removes 000.
+    Remove all fields from the record that have non-numeric tags (not matching pattern 001-999).
+    Also removes field 000, which is invalid in MARC records.
 
     Args:
         record (Record): The MARC record to preprocess.
+
+    Returns:
+        Record: The preprocessed MARC record.
     """
     for field in record.get_fields():
         if not re.fullmatch(r"\d{3}", field.tag) or field.tag == "000":
+            reason = "invalid tag 000" if field.tag == "000" else f"non-numeric tag {field.tag}"
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
                 record["001"].value(),
-                f"Non-numeric field {field.tag} removed",
+                f"Field removed: {reason}",
                 field,
             )
             record.remove_field(field)

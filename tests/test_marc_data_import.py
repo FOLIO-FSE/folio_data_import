@@ -115,7 +115,8 @@ class TestWrapUp:
             marc_record_preprocessors="",
             preprocessors_args={},
             job_ids_file_path=str(job_ids_file),
-            marc_files=[tmp_path / "test.mrc"]
+            marc_files=[tmp_path / "test.mrc"],
+            no_progress=True,
         )
         
         with patch('folio_data_import.MARCDataImport.logger') as mock_logger:
@@ -164,7 +165,8 @@ class TestWrapUp:
             marc_record_preprocessors="",
             preprocessors_args={},
             job_ids_file_path=str(job_ids_file),
-            marc_files=[tmp_path / "test.mrc"]
+            marc_files=[tmp_path / "test.mrc"],
+            no_progress=True,
         )
         
         with patch('folio_data_import.MARCDataImport.logger'):
@@ -276,7 +278,8 @@ class TestMoveAfterContext:
             marc_record_preprocessors="",
             preprocessors_args={},
             job_ids_file_path=str(job_ids_file),
-            marc_files=[tmp_path / "test.mrc"]
+            marc_files=[tmp_path / "test.mrc"],
+            no_progress=True,
         )
         
         with patch('folio_data_import.MARCDataImport.logger') as mock_logger:
