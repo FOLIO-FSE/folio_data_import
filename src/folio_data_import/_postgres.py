@@ -109,7 +109,7 @@ def ssh_tunnel(
 ) -> Iterator[int]:
     local_port = _free_port()
 
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # noqa: S603
         [
             ssh_path or "ssh",
             "-N",
