@@ -48,6 +48,7 @@ folio-data-import = "folio_data_import.__main__:app"
 folio-marc-import = "folio_data_import.MARCDataImport:app"
 folio-user-import = "folio_data_import.UserImport:app"
 folio-batch-poster = "folio_data_import.BatchPoster:app"
+folio-di-logs = "folio_data_import.DILogRetriever:app"
 
 [project.optional-dependencies]
 redis = [
