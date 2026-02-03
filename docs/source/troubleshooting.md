@@ -149,6 +149,89 @@ folio-data-import marc \
   --batch-delay 2.0
 ```
 
+### Analyzing Failed Records with DI Log Retriever
+
+**Problem:** MARC import completed but many records failed. You need to see the errors and get the original MARC records.
+
+**Solution:**
+
+Use the `get-di-logs` command to retrieve error logs directly from the database:
+
+```bash
+# Retrieve errors from previous import jobs
+folio-data-import get-di-logs \
+  --db-config db_config.json \
+  --job-ids-file marc_import_job_ids.txt \
+  --report-file-path errors.tsv \
+  --marc-file-path failed_records.mrc
+```
+
+This generates:
+- `errors.tsv` - Error messages for each failed record
+- `failed_records.mrc` - MARC file with all failed records for reprocessing
+
+See the [DI Log Retriever Guide](di_log_retriever_guide.md) for complete documentation.
+
+## DI Log Retriever Issues
+
+### Error: "PostgreSQL support requires the 'postgres' optional dependencies"
+
+**Problem:** The psycopg2 library is not installed.
+
+**Solution:**
+
+Install the PostgreSQL dependencies:
+
+```bash
+pip install 'folio_data_import[postgres]'
+# or
+uv add 'folio_data_import[postgres]'
+```
+
+### Error: "Connection refused" or database timeout
+
+**Problem:** Cannot connect to the PostgreSQL database.
+
+**Solution:**
+
+1. Verify database host and port in `db_config.json`
+2. Check if you need SSH tunneling (most production databases do)
+3. Verify firewall rules allow your connection
+4. Test database connectivity:
+
+```bash
+psql -h your-host -p 5432 -U folio -d folio
+```
+
+### Error: "ssh_host is required when ssh_tunnel is enabled"
+
+**Problem:** SSH tunnel is enabled but the bastion host is not specified.
+
+**Solution:**
+
+Add the `ssh_host` to your `ssh_config.json`:
+
+```json
+{
+  "ssh_tunnel": true,
+  "ssh_host": "bastion.example.com",
+  "use_ssh_config": true
+}
+```
+
+### No Error Records Found
+
+**Problem:** Command runs but returns no errors.
+
+**Solution:**
+
+1. Verify the Job Execution IDs are correct (copy from FOLIO Data Import logs)
+2. Confirm the jobs actually had errors (not just warnings)
+3. Check you're connecting to the correct database and tenant
+4. Verify the database user has SELECT permissions on:
+   - `{tenant}_mod_source_record_manager.journal_records`
+   - `{tenant}_mod_source_record_manager.incoming_records`
+
 ## User Import Issues
 
 ### Error: "library_name is required"
