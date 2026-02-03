@@ -9,6 +9,8 @@ app.register_install_completion_command()
 app.command("folio_data_import.MARCDataImport:main", name="marc")
 app.command("folio_data_import.UserImport:main", name="users")
 app.command("folio_data_import.BatchPoster:main", name="batch-poster")
+app.command("folio_data_import.DILogRetriever:main", name="get-di-logs")
+
 
 if __name__ == "__main__":
     app()
