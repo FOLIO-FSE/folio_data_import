@@ -331,6 +331,11 @@ class BatchPoster:
                 self._failed_records_path, "w", encoding="utf-8"
             )
             logger.info(f"Opened failed records file: {self._failed_records_path}")
+        if (
+            not hasattr(self.folio_client, "async_httpx_client")
+            or self.folio_client.async_httpx_client is None
+        ):
+            self.folio_client.async_httpx_client = self.folio_client.get_folio_http_client_async()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -344,6 +349,11 @@ class BatchPoster:
                     f"to {self._failed_records_path}"
                 )
             self._failed_records_file_handle = None
+        if (
+            hasattr(self.folio_client, "async_httpx_client")
+            and not self.folio_client.async_httpx_client.is_closed
+        ):
+            await self.folio_client.async_httpx_client.aclose()
 
     def _write_failed_record(self, record: dict) -> None:
         """
