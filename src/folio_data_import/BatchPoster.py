@@ -19,6 +19,7 @@ import cyclopts
 import folioclient
 import httpx
 from folioclient import FolioClient
+from folioclient.exceptions import folio_errors
 from pydantic import BaseModel, Field
 
 from folio_data_import import get_folio_connection_parameters, set_up_cli_logging
@@ -650,6 +651,7 @@ class BatchPoster:
             if "id" in record and record["id"] in existing_records:
                 self.prepare_record_for_upsert(record, existing_records[record["id"]])
 
+    @folio_errors
     async def post_batch(self, batch: List[dict]) -> tuple[httpx.Response, int, int]:
         """
         Post a batch of records to FOLIO.
