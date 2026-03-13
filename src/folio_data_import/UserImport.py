@@ -793,7 +793,7 @@ class UserImporter:  # noqa: R0902
         Returns:
             None
         """
-        if existing_user.get("type", "") in ["staff", "system"]:
+        if existing_user.get("type", "") in ["staff", "system", "shadow", "dcb"]:
             logger.warning(
                 f"Row {line_number}: User {existing_user['id']} "
                 f"is of type {existing_user.get('type', '')}, "
@@ -1261,8 +1261,10 @@ def main(
             "--delete-all flag is set. Users present in the provided file(s) will be "
             "deleted rather than created or updated. Proceed with caution."
         )
-        print("Waiting 10 seconds before proceeding with deletions...")
-        sleep(10)
+        for i in range(10, 0, -1):
+            print(f"\rProceeding with deletions in {i} seconds...", end="", flush=True)
+            sleep(1)
+        print("\rProceeding with deletions now.                ")
 
     config_data = {}
     if config_file:
