@@ -12,8 +12,9 @@ User Import:
 - Handles service point assignments via the `/service-points-users` API
 - Creates request preferences and permission user records for new users
 - Provides job-level and per-record field protection during updates
-- Supports partial updates (only update present fields)
+- Supports partial updates (only update present fields) or full record replacement (default)
 - Offers flexible user matching (username, barcode, externalSystemId) with forced matching on `id`
+- Bulk deletion of matched users via `--delete-all` (staff and system users are protected)
 - Batch processing with real-time progress tracking
 
 ## Basic Usage
@@ -74,6 +75,7 @@ Example `config.json`:
 | `--default-preferred-contact-type` | - | `email` | Default contact type (see table below) |
 | `--fields-to-protect` | `FOLIO_FIELDS_TO_PROTECT` | (none) | Comma-separated list of field paths to protect |
 | `--update-only-present-fields` | - | `false` | Only update fields present in input |
+| `--delete-all` | `FOLIO_DELETE_ALL_USERS` | `false` | Delete users in file(s) instead of creating/updating |
 | `--limit-async-requests` | `FOLIO_LIMIT_ASYNC_REQUESTS` | 10 | Max concurrent HTTP requests (1-100) |
 | `--report-file-base-path` | - | Current directory | Base path for report files |
 | `--config-file` | - | (none) | Path to JSON config file (overrides CLI parameters) |
@@ -228,6 +230,61 @@ folio-data-import users \
 
 When enabled, missing fields in the input are preserved from the existing record rather than being cleared. This is useful for targeted updates.
 
+When **disabled** (the default), the incoming record completely **replaces** the existing record. Only the user's `id` is preserved from the original; all other fields come from the incoming record. Any fields present in the existing record but absent from the incoming record are removed. Protected fields (via `--fields-to-protect` or per-record `customFields.protectedFields`) are always re-applied after the replacement.
+
+```{note}
+The preferred contact type is also preserved from the existing record when the incoming record does not include a `preferredContactTypeId`. The configured default is only applied when neither the incoming nor the existing record has a valid value.
+```
+
+## User Deletion
+
+```{warning}
+Use this feature with caution. No dependency checks are performed before a user is deleted, so this could result in orphaned circulation transactions and other unexpected system behavior.
+```
+
+The `--delete-all` flag changes the tool from import mode to deletion mode. Instead of creating or updating users, it deletes users found in the input file(s) from FOLIO:
+
+```bash
+folio-data-import users \
+  --library-name "My Library" \
+  --user-file-path users_to_delete.jsonl \
+  --delete-all
+```
+
+Or via a config file:
+
+```json
+{
+  "library_name": "My Library",
+  "user_file_paths": ["users_to_delete.jsonl"],
+  "user_match_key": "username",
+  "delete_all": true
+}
+```
+
+```{note}
+The `--delete-all` CLI flag overrides the config file value when both are specified.
+```
+
+### How Deletion Works
+
+1. Each user in the input file is matched against FOLIO using the configured match key
+2. If a matching user is found, the tool checks the user's `type` field
+3. **Staff** and **system** users are automatically skipped to prevent accidental removal
+4. For eligible users (e.g., `patron` type), the following records are deleted:
+   - The user record itself (`/users/{id}`)
+   - Associated request preferences (`/request-preference-storage/request-preference/{id}`)
+   - Associated permission user record (`/perms/users/{id}`)
+   - Associated service points user record (`/service-points-users/{id}`)
+5. A 10-second delay is applied before deletions begin as a safety measure. Use `Ctrl+C` to abort, if desired.
+
+### Deletion Statistics
+
+Deletion progress is tracked alongside other statistics:
+- **Deleted**: Users successfully removed
+- **Failed**: Users that could not be deleted (e.g., due to API errors)
+- Staff/system users that are skipped are not counted in either category
+
 ## Service Point Assignment
 
 Assign service points using codes (resolved automatically) or UUIDs:
@@ -304,6 +361,7 @@ folio-data-import users \
 Real-time progress bars show:
 - Total users processed
 - Successful creates/updates
+- Deleted users (when using `--delete-all`)
 - Failed imports
 - Processing speed and time
 
@@ -385,15 +443,18 @@ folio-data-import users \
 |---------|-----------------|-------------------------|
 | Input format | Wrapped JSON with `users` array | JSON Lines (one user object per line) |
 | API approach | Single POST to `/user-import` | Individual POST/PUT to `/users` |
-| Service points | N/A | Codes or UUIDs via `/service-points-users` |
-| Field protection | `updateOnlyPresentFields` for addresses | Job-level and per-record for any field |
+| Service points assignment | N/A | User assignments via `/service-points-users` |
+| Field protection | `updateOnlyPresentFields` (top-level fields preserved; addresses deep-merged by type) | Job-level and per-record for any field |
 | Contact type | `mail`, `email`, `text`, `phone`, `mobile` | Same values plus IDs (`001`-`005`) |
 | Match key | `externalSystemId` only | Configurable with forced matching on `id` |
 | Custom fields | Can define and manage via `included` | Values only (definitions must exist in FOLIO) |
 | Departments | Can create via `included` | Values only (must already exist in FOLIO) |
+| Request preferences | Per-user with delivery/fulfillment settings | Auto-created for new users |
 | Batch processing | Single request | Configurable batch size (default 250) |
 | Progress tracking | None | Real-time progress bars |
 | Concurrent requests | N/A | Configurable (default 10, max 100) |
+| Bulk deletion | Deactivation only (`deactivateMissingUsers`) | `--delete-all` flag (skips staff/system users) |
+| Update behavior | Full replacement (default) or partial update (top-level fields + address deep merge) | Full replacement (default) or partial update (all fields) |
 
 ## See Also
 

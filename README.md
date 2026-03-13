@@ -149,6 +149,18 @@ folio-data-import users --user-file users.jsonl --user-match-key username
 folio-data-import users --user-file users.jsonl --default-preferred-contact-type email
 ```
 
+**Update Behavior:** Control how existing records are updated:
+
+- **Full replacement** (default): The incoming record completely replaces the existing record. Fields present in the existing record but absent from the incoming record are removed. The preferred contact type is preserved from the existing record when not specified in the incoming record.
+  ```shell
+  folio-data-import users --user-file users.jsonl
+  ```
+
+- **Partial update**: Only fields present in the incoming record are updated; missing fields are preserved from the existing record.
+  ```shell
+  folio-data-import users --user-file users.jsonl --update-only-present-fields
+  ```
+
 **Field Protection:** Protect specific fields from being updated:
 
 - **Job-level protection** (applies to all records):
@@ -166,6 +178,16 @@ folio-data-import users --user-file users.jsonl --default-preferred-contact-type
     }
   }
   ```
+
+**User Deletion:** Delete users listed in the input file(s) instead of creating or updating them:
+```shell
+folio-data-import users --user-file users.jsonl --delete-all
+```
+
+- Only users that exist in FOLIO and match via the configured match key are deleted
+- Staff and system users are automatically skipped to prevent accidental removal
+- Associated request preferences, permission user records, and service point assignments are also removed
+- A 10-second delay is applied before deletions begin
 
 #### Input Format
 
