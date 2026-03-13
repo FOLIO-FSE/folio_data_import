@@ -1,3 +1,4 @@
+from time import sleep
 import asyncio
 import datetime
 import glob
@@ -53,6 +54,7 @@ class UserImporterStats(BaseModel):
     created: int = 0
     updated: int = 0
     failed: int = 0
+    deleted: int = 0
 
 
 class UserImporter:  # noqa: R0902
@@ -141,6 +143,13 @@ class UserImporter:  # noqa: R0902
             Field(
                 title="No progress bar",
                 description="Disable the progress bar display",
+            ),
+        ] = False
+        delete_all: Annotated[
+            bool,
+            Field(
+                title="Delete all users in file(s)",
+                description="Whether to delete existing users, rather than create/update.",
             ),
         ] = False
 
@@ -475,7 +484,7 @@ class UserImporter:  # noqa: R0902
             if existing_personal:
                 existing_user["personal"] = existing_personal
         else:
-            existing_user.update(user_obj)
+            existing_user = {"id": existing_user["id"], **user_obj}
         if "personal" in existing_user:
             existing_user["personal"].update(preferred_contact_type)
         else:
@@ -769,6 +778,57 @@ class UserImporter:  # noqa: R0902
         )
         response.raise_for_status()
 
+    async def delete_user(
+        self, existing_user, existing_rp, existing_pu, existing_spu, line_number: int
+    ) -> None:
+        """
+        Deletes a user and associated objects.
+
+        Args:
+            existing_user (dict): The existing user object to be deleted.
+            existing_rp (dict): The existing request preference object associated with the user.
+            existing_pu (dict): The existing permission user object associated with the user.
+            existing_spu (dict): The existing service points user object associated with the user.
+            line_number (int): The line number in the input file for logging purposes.
+        Returns:
+            None
+        """
+        if existing_user.get("type", "") in ["staff", "system"]:
+            logger.warning(
+                f"Row {line_number}: User {existing_user['id']} "
+                f"is of type {existing_user.get('type', '')}, "
+                "skipping deletion\n"
+            )
+            return
+        try:
+            if existing_user:
+                await self.folio_client.folio_delete(
+                    f"/users/{existing_user['id']}",
+                )
+            if existing_rp:
+                await self.folio_client.folio_delete(
+                    f"/request-preference-storage/request-preference/{existing_rp.get('id', '')}"
+                )
+            if existing_pu:
+                await self.folio_client.folio_delete(f"/perms/users/{existing_pu.get('id', '')}")
+            if existing_spu:
+                await self.folio_client.folio_delete(
+                    f"/service-points-users/{existing_spu.get('id', '')}"
+                )
+
+            if existing_user:
+                logger.debug(f"Row {line_number}: Deleted user {existing_user['id']}\n")
+
+            async with self.lock:
+                self.stats.deleted += 1
+        except folioclient.FolioError as ee:
+            logger.error(
+                f"Row {line_number}: Failed to delete user {existing_user['id']}: "
+                f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
+            )
+            async with self.lock:
+                self.stats.failed += 1
+
     async def process_line(
         self,
         user: str,
@@ -799,6 +859,15 @@ class UserImporter:  # noqa: R0902
                 existing_pu,
                 existing_spu,
             ) = await self.process_existing_user(user_obj)
+            if (
+                self.config.delete_all
+                and existing_user
+                and existing_user.get("type", "") not in ["staff", "system"]
+            ):
+                await self.delete_user(
+                    existing_user, existing_rp, existing_pu, existing_spu, line_number
+                )
+                return
             await self.map_address_types(user_obj, line_number)
             await self.map_patron_groups(user_obj, line_number)
             await self.map_departments(user_obj, line_number)
@@ -990,12 +1059,14 @@ class UserImporter:  # noqa: R0902
                             created=self.stats.created,
                             updated=self.stats.updated,
                             failed=self.stats.failed,
+                            deleted=self.stats.deleted,
                         )
                         message = (
                             f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                             f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
                             f"seconds. - Users created: {self.stats.created} - Users updated: "
-                            f"{self.stats.updated} - Users failed: {self.stats.failed}"
+                            f"{self.stats.updated} - Users deleted: {self.stats.deleted}"
+                            f" - Users failed: {self.stats.failed}"
                         )
                         logger.info(message)
                     tasks = []
@@ -1010,12 +1081,14 @@ class UserImporter:  # noqa: R0902
                         created=self.stats.created,
                         updated=self.stats.updated,
                         failed=self.stats.failed,
+                        deleted=self.stats.deleted,
                     )
                     message = (
                         f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
                         f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
                         f"Users created: {self.stats.created} - Users updated: "
-                        f"{self.stats.updated} - Users failed: {self.stats.failed}"
+                        f"{self.stats.updated} - Users deleted: {self.stats.deleted}"
+                        f" - Users failed: {self.stats.failed}"
                     )
                     logger.info(message)
 
@@ -1087,6 +1160,14 @@ def main(
             group="FOLIO Connection Parameters",
         ),
     ] = None,
+    delete_all: Annotated[
+        bool,
+        cyclopts.Parameter(
+            env_var="FOLIO_DELETE_ALL_USERS",
+            show_env_var=True,
+            group="Job Configuration Parameters",
+        ),
+    ] = False,
     fields_to_protect: Annotated[
         str | None,
         cyclopts.Parameter(
@@ -1146,6 +1227,7 @@ def main(
         user_file_paths (Tuple[Path, ...]): Path(s) to the user data file(s). Use
             --user-file-paths or --user-file-path (deprecated, will be removed in future versions).
         member_tenant_id (str): The FOLIO ECS member tenant id (if applicable).
+        delete_all (bool): Whether to delete existing users, rather than create/update.
         fields_to_protect (str): Comma-separated list of fields to protect during update.
         update_only_present_fields (bool): Whether to update only fields present in the input.
         limit_async_requests (int): The maximum number of concurrent async HTTP requests.
@@ -1174,11 +1256,21 @@ def main(
         report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
     )
 
+    if delete_all:
+        logger.warning(
+            "--delete-all flag is set. Users present in the provided file(s) will be "
+            "deleted rather than created or updated. Proceed with caution."
+        )
+        print("Waiting 10 seconds before proceeding with deletions...")
+        sleep(10)
+
     config_data = {}
     if config_file:
         try:
             with open(config_file, "r") as f:
                 config_data = json.load(f)
+                # CLI flags override config file values
+                config_data["delete_all"] = delete_all or config_data.get("delete_all", False)
                 config = UserImporter.Config(**config_data)
         except Exception as e:
             logger.critical(f"Failed to load configuration file {config_file}: {e}")
@@ -1200,6 +1292,7 @@ def main(
             limit_simultaneous_requests=limit_async_requests,
             user_file_paths=file_paths_list,
             no_progress=no_progress,
+            delete_all=delete_all,
         )
     try:
         importer = UserImporter(folio_client, config)
