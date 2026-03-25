@@ -801,17 +801,19 @@ class UserImporter:  # noqa: R0902
             return
         try:
             if existing_user:
-                await self.folio_client.folio_delete(
+                await self.folio_client.folio_delete_async(
                     f"/users/{existing_user['id']}",
                 )
             if existing_rp:
-                await self.folio_client.folio_delete(
+                await self.folio_client.folio_delete_async(
                     f"/request-preference-storage/request-preference/{existing_rp.get('id', '')}"
                 )
             if existing_pu:
-                await self.folio_client.folio_delete(f"/perms/users/{existing_pu.get('id', '')}")
+                await self.folio_client.folio_delete_async(
+                    f"/perms/users/{existing_pu.get('id', '')}"
+                )
             if existing_spu:
-                await self.folio_client.folio_delete(
+                await self.folio_client.folio_delete_async(
                     f"/service-points-users/{existing_spu.get('id', '')}"
                 )
 
@@ -858,14 +860,11 @@ class UserImporter:  # noqa: R0902
                 existing_pu,
                 existing_spu,
             ) = await self.process_existing_user(user_obj)
-            if (
-                self.config.delete_all
-                and existing_user
-                and existing_user.get("type", "") not in ["staff", "system"]
-            ):
-                await self.delete_user(
-                    existing_user, existing_rp, existing_pu, existing_spu, line_number
-                )
+            if self.config.delete_all:
+                if existing_user:
+                    await self.delete_user(
+                        existing_user, existing_rp, existing_pu, existing_spu, line_number
+                    )
                 return
             await self.map_address_types(user_obj, line_number)
             await self.map_patron_groups(user_obj, line_number)
@@ -1038,10 +1037,11 @@ class UserImporter:  # noqa: R0902
             total_lines = sum(buf.count(b"\n") for buf in iter(lambda: f.read(1024 * 1024), b""))
 
         with self.reporter:
+            description = "Deleting users" if self.config.delete_all else "Importing users"
             task_id = self.reporter.start_task(
                 "users",
                 total=total_lines,
-                description="Importing users",
+                description=description,
             )
             openfile.seek(0)
             tasks = []
@@ -1052,21 +1052,33 @@ class UserImporter:  # noqa: R0902
                     await asyncio.gather(*tasks)
                     duration = time.time() - start
                     async with self.lock:
-                        self.reporter.update_task(
-                            task_id,
-                            advance=len(tasks),
-                            created=self.stats.created,
-                            updated=self.stats.updated,
-                            failed=self.stats.failed,
-                            deleted=self.stats.deleted,
-                        )
-                        message = (
-                            f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                            f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
-                            f"seconds. - Users created: {self.stats.created} - Users updated: "
-                            f"{self.stats.updated} - Users deleted: {self.stats.deleted}"
-                            f" - Users failed: {self.stats.failed}"
-                        )
+                        if self.config.delete_all:
+                            self.reporter.update_task(
+                                task_id,
+                                advance=len(tasks),
+                                deleted=self.stats.deleted,
+                                failed=self.stats.failed,
+                            )
+                            message = (
+                                f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
+                                f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
+                                f"seconds. - Users deleted: {self.stats.deleted}"
+                                f" - Users failed: {self.stats.failed}"
+                            )
+                        else:
+                            self.reporter.update_task(
+                                task_id,
+                                advance=len(tasks),
+                                created=self.stats.created,
+                                updated=self.stats.updated,
+                                failed=self.stats.failed,
+                            )
+                            message = (
+                                f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
+                                f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
+                                f"seconds. - Users created: {self.stats.created} - Users updated: "
+                                f"{self.stats.updated} - Users failed: {self.stats.failed}"
+                            )
                         logger.info(message)
                     tasks = []
             if tasks:
@@ -1074,21 +1086,33 @@ class UserImporter:  # noqa: R0902
                 await asyncio.gather(*tasks)
                 duration = time.time() - start
                 async with self.lock:
-                    self.reporter.update_task(
-                        task_id,
-                        advance=len(tasks),
-                        created=self.stats.created,
-                        updated=self.stats.updated,
-                        failed=self.stats.failed,
-                        deleted=self.stats.deleted,
-                    )
-                    message = (
-                        f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                        f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
-                        f"Users created: {self.stats.created} - Users updated: "
-                        f"{self.stats.updated} - Users deleted: {self.stats.deleted}"
-                        f" - Users failed: {self.stats.failed}"
-                    )
+                    if self.config.delete_all:
+                        self.reporter.update_task(
+                            task_id,
+                            advance=len(tasks),
+                            deleted=self.stats.deleted,
+                            failed=self.stats.failed,
+                        )
+                        message = (
+                            f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
+                            f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
+                            f"Users deleted: {self.stats.deleted}"
+                            f" - Users failed: {self.stats.failed}"
+                        )
+                    else:
+                        self.reporter.update_task(
+                            task_id,
+                            advance=len(tasks),
+                            created=self.stats.created,
+                            updated=self.stats.updated,
+                            failed=self.stats.failed,
+                        )
+                        message = (
+                            f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
+                            f"Batch of {len(tasks)} users processed in {duration:.2f} seconds. - "
+                            f"Users created: {self.stats.created} - Users updated: "
+                            f"{self.stats.updated} - Users failed: {self.stats.failed}"
+                        )
                     logger.info(message)
 
     def get_stats(self) -> UserImporterStats:
@@ -1271,9 +1295,7 @@ def main(
         )
         if not yes:
             if not sys.stdin.isatty():
-                logger.critical(
-                    "--delete-all requires --yes/-y flag in non-interactive mode."
-                )
+                logger.critical("--delete-all requires --yes/-y flag in non-interactive mode.")
                 sys.exit(1)
             input("Press Enter to proceed with deletions, or Ctrl+C to abort...")
 
