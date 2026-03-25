@@ -45,6 +45,7 @@ PREFERRED_CONTACT_TYPES_MAP = {
 
 
 USER_MATCH_KEYS = ["username", "barcode", "externalSystemId"]
+PROTECTED_USER_TYPES = ["staff", "system", "shadow", "dcb"]
 
 
 class UserImporterStats(BaseModel):
@@ -792,7 +793,7 @@ class UserImporter:  # noqa: R0902
         Returns:
             None
         """
-        if existing_user.get("type", "") in ["staff", "system", "shadow", "dcb"]:
+        if existing_user.get("type", "") in PROTECTED_USER_TYPES:
             logger.warning(
                 f"Row {line_number}: User {existing_user['id']} "
                 f"is of type {existing_user.get('type', '')}, "
@@ -1075,9 +1076,10 @@ class UserImporter:  # noqa: R0902
                             )
                             message = (
                                 f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                                f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
-                                f"seconds. - Users created: {self.stats.created} - Users updated: "
-                                f"{self.stats.updated} - Users failed: {self.stats.failed}"
+                                f"Batch of {self.config.batch_size} users processed in "
+                                f"{duration:.2f} seconds. - Users created: {self.stats.created}"
+                                f" - Users updated: {self.stats.updated} - Users failed: "
+                                f"{self.stats.failed}"
                             )
                         logger.info(message)
                     tasks = []
@@ -1305,7 +1307,7 @@ def main(
             with open(config_file, "r") as f:
                 config_data = json.load(f)
                 # CLI flags override config file values
-                config_data["delete_all"] = delete_all or config_data.get("delete_all", False)
+                config_data["delete_all"] = delete_all
                 config = UserImporter.Config(**config_data)
         except Exception as e:
             logger.critical(f"Failed to load configuration file {config_file}: {e}")
