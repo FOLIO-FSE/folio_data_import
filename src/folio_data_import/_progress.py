@@ -267,6 +267,7 @@ class GenericStatsColumn(ProgressColumn):
         ("posted", "Posted", "bright_green"),
         ("created", "Created", "green"),
         ("updated", "Updated", "cyan"),
+        ("deleted", "Deleted", "yellow"),
         ("failed", "Failed", "red"),
         ("processed", "Processed", "blue"),
     ]
