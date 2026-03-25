@@ -277,7 +277,7 @@ The `--delete-all` CLI flag overrides the config file value when both are specif
 
 1. Each user in the input file is matched against FOLIO using the configured match key
 2. If a matching user is found, the tool checks the user's `type` field
-3. **Staff** and **system** users are automatically skipped to prevent accidental removal
+3. **Staff**, **dcb**, **shadow**, and **system** users are automatically skipped to prevent accidental removal
 4. For eligible users (e.g., `patron` type), the following records are deleted:
    - The user record itself (`/users/{id}`)
    - Associated request preferences (`/request-preference-storage/request-preference/{id}`)
