@@ -1,4 +1,3 @@
-from time import sleep
 import asyncio
 import datetime
 import glob
@@ -1207,6 +1206,14 @@ def main(
         cyclopts.Parameter(group="Job Configuration Parameters"),
     ] = "email",
     no_progress: Annotated[bool, cyclopts.Parameter(group="Job Configuration Parameters")] = False,
+    yes: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=["--yes", "-y"],
+            group="Job Configuration Parameters",
+            help="Skip confirmation prompt for destructive operations (e.g. --delete-all).",
+        ),
+    ] = False,
     debug: Annotated[
         bool,
         cyclopts.Parameter(
@@ -1236,6 +1243,7 @@ def main(
         user_match_key (str): The key to match users (externalSystemId, username, barcode).
         default_preferred_contact_type (str): The default preferred contact type for users
         no_progress (bool): Whether to disable the progress bar.
+        yes (bool): Skip confirmation prompt for destructive operations (e.g. --delete-all).
         debug (bool): Enable debug logging.
     """  # noqa: E501
     set_up_cli_logging(logger, "folio_user_import", debug, stream_level=logging.WARNING)
@@ -1261,10 +1269,13 @@ def main(
             "--delete-all flag is set. Users present in the provided file(s) will be "
             "deleted rather than created or updated. Proceed with caution."
         )
-        for i in range(10, 0, -1):
-            print(f"\rProceeding with deletions in {i} seconds...", end="", flush=True)
-            sleep(1)
-        print("\rProceeding with deletions now.                ")
+        if not yes:
+            if not sys.stdin.isatty():
+                logger.critical(
+                    "--delete-all requires --yes/-y flag in non-interactive mode."
+                )
+                sys.exit(1)
+            input("Press Enter to proceed with deletions, or Ctrl+C to abort...")
 
     config_data = {}
     if config_file:
