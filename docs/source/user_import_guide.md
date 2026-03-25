@@ -79,6 +79,7 @@ Example `config.json`:
 | `--limit-async-requests` | `FOLIO_LIMIT_ASYNC_REQUESTS` | 10 | Max concurrent HTTP requests (1-100) |
 | `--report-file-base-path` | - | Current directory | Base path for report files |
 | `--config-file` | - | (none) | Path to JSON config file (overrides CLI parameters) |
+| `--yes` / `-y` | - | `false` | Skip confirmation prompt for destructive operations (e.g. `--delete-all`) |
 | `--no-progress` | - | `false` | Disable progress display |
 
 ### Preferred Contact Types
@@ -232,6 +233,12 @@ When enabled, missing fields in the input are preserved from the existing record
 
 When **disabled** (the default), the incoming record completely **replaces** the existing record. Only the user's `id` is preserved from the original; all other fields come from the incoming record. Any fields present in the existing record but absent from the incoming record are removed. Protected fields (via `--fields-to-protect` or per-record `customFields.protectedFields`) are always re-applied after the replacement.
 
+```{warning}
+**Breaking change in v0.6.0:** Prior to v0.6.0, the default update behavior incorrectly *merged* the incoming record into the existing record, preserving any fields absent from the incoming data. This was an implementation defect — it did not match the tool's stated full-replacement semantics. Starting in v0.6.0, the default behavior correctly performs a full replacement: only the user's `id` is carried over from the existing record, and all other fields are taken from the incoming record. Fields present in the existing record but missing from the incoming record are removed.
+
+If your workflow relied on the previous merge behavior, add `--update-only-present-fields` to preserve the old behavior.
+```
+
 ```{note}
 The preferred contact type is also preserved from the existing record when the incoming record does not include a `preferredContactTypeId`. The configured default is only applied when neither the incoming nor the existing record has a valid value.
 ```
@@ -276,7 +283,7 @@ The `--delete-all` CLI flag overrides the config file value when both are specif
    - Associated request preferences (`/request-preference-storage/request-preference/{id}`)
    - Associated permission user record (`/perms/users/{id}`)
    - Associated service points user record (`/service-points-users/{id}`)
-5. A 10-second delay is applied before deletions begin as a safety measure. Use `Ctrl+C` to abort, if desired.
+5. An interactive confirmation prompt is displayed before deletions begin. Press Enter to proceed or `Ctrl+C` to abort. Use `--yes`/`-y` to skip the prompt (required in non-interactive environments such as CI/CD pipelines or cron jobs).
 
 ### Deletion Statistics
 

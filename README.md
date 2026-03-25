@@ -151,6 +151,8 @@ folio-data-import users --user-file users.jsonl --default-preferred-contact-type
 
 **Update Behavior:** Control how existing records are updated:
 
+> **⚠️ Breaking change in v0.6.0:** Prior versions incorrectly merged incoming records into existing records, preserving fields absent from the incoming data. Starting in v0.6.0, the default behavior is full replacement — fields not present in the incoming record are removed. If you depend on the previous merge behavior, use `--update-only-present-fields`.
+
 - **Full replacement** (default): The incoming record completely replaces the existing record. Fields present in the existing record but absent from the incoming record are removed. The preferred contact type is preserved from the existing record when not specified in the incoming record.
   ```shell
   folio-data-import users --user-file users.jsonl
@@ -187,7 +189,7 @@ folio-data-import users --user-file users.jsonl --delete-all
 - Only users that exist in FOLIO and match via the configured match key are deleted
 - Staff and system users are automatically skipped to prevent accidental removal
 - Associated request preferences, permission user records, and service point assignments are also removed
-- A 10-second delay is applied before deletions begin
+- An interactive confirmation prompt is displayed before deletions begin; use `--yes`/`-y` to skip it (required in non-interactive environments)
 
 #### Input Format
 
