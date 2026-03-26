@@ -1062,8 +1062,8 @@ class UserImporter:  # noqa: R0902
                             )
                             message = (
                                 f"{dt.now().isoformat(sep=' ', timespec='milliseconds')}: "
-                                f"Batch of {self.config.batch_size} users processed in {duration:.2f} "
-                                f"seconds. - Users deleted: {self.stats.deleted}"
+                                f"Batch of {self.config.batch_size} users processed in "
+                                f"{duration:.2f} seconds. - Users deleted: {self.stats.deleted}"
                                 f" - Users failed: {self.stats.failed}"
                             )
                         else:
