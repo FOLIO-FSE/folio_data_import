@@ -2,6 +2,7 @@ import importlib
 import logging
 import re
 import sys
+from datetime import datetime
 from typing import Callable, Dict, List, Tuple, Union
 
 import pymarc
@@ -106,6 +107,29 @@ class MARCPreprocessor:
         return record
 
 
+def remove_sudoc_prefixes(record: Record) -> Record:
+    """Remove common ABES/SUDOC prefixes from the 001 of a record.
+    Useful when importing records from the ABES SUDOC catalog that
+    you want to match to existing records in FOLIO without the prefix.
+
+    Args:
+    record (Record): The MARC record to preprocess.
+    """
+    sudoc_prefixes = ["PPN", "ABES"]
+    if "001" in record:
+        if any(record["001"].data.startswith(prefix) for prefix in sudoc_prefixes):
+            logger.debug("Field '001' starts with a known SUDOC prefix. Removing prefix from 001.")
+            for prefix in sudoc_prefixes:
+                record["001"].data = record["001"].data.replace(prefix, "").strip()
+        else:
+            logger.debug(
+                "Field '001' does not start with a known SUDOC prefix. No changes made to 001."
+            )
+    else:
+        logger.warning("Field '001' not found in record. Skipping prefix removal.")
+    return record
+
+
 def prepend_prefix_001(record: Record, prefix: str) -> Record:
     """
     Prepend a prefix to the record's 001 field.
@@ -117,9 +141,11 @@ def prepend_prefix_001(record: Record, prefix: str) -> Record:
     Returns:
         Record: The preprocessed MARC record.
     """
-    if "001" in record:
+    if "001" in record and record["001"].data:
         record["001"].data = (
-            f"({prefix})" + record["001"].data if record["001"].data else f"({prefix})"
+            f"({prefix})" + record["001"].data
+            if not record["001"].data.startswith(f"({prefix})")
+            else record["001"].data
         )
     else:
         logger.warning("Field '001' not found in record. Skipping prefix prepend.")
@@ -426,6 +452,35 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
     return record
 
 
+def clean_empty_contributors(record: Record, **kwargs) -> Record:
+    """
+    Remove contributor fields (100, 110, 111, 700, 710, 711) that have empty subfield a. These can
+    cause data import mapping issues in FOLIO. Removals are logged at custom log level 26, which is
+    used by folio_migration_tools to populate the data issues report.
+
+    Args:
+        record (Record): The MARC record to preprocess.
+
+    Returns:
+        Record: The preprocessed MARC record.
+    """
+    for field in record.get_fields("100", "110", "111", "700", "710", "711"):
+        if all(
+            not subfield.value.strip()
+            for subfield in field.subfields
+            if subfield.code in ["a", "b", "c", "d", "q"]
+        ):
+            logger.log(
+                26,
+                "DATA ISSUE\t%s\t%s\t%s",
+                record["001"].value(),
+                f"{field.tag} contributor field has empty name subfields, removing field",
+                field,
+            )
+            record.remove_field(field)
+    return record
+
+
 def fix_bib_leader(record: Record, **kwargs) -> Record:
     """
     Fixes the leader of the record by setting the record status to 'c' (modified
@@ -543,6 +598,51 @@ def remove_non_numeric_fields(record: Record, **kwargs) -> Record:
                 field,
             )
             record.remove_field(field)
+    return record
+
+
+def populate_blank_008_0_5(record: Record, **kwargs) -> Record:
+    """
+    Populate the first 6 characters of the 008 with today's date in the format YYMMDD if they are
+    blank. Workaround for FOLIO issue: https://folio-org.atlassian.net/browse/MODQM-515
+    """
+    if "008" in record and record["008"].data:
+        if len(record["008"].data) >= 6 and record["008"].data[:6] == "      ":
+            today = datetime.today().strftime("%y%m%d")
+            record["008"].data = today + record["008"].data[6:]
+            logger.log(
+                26,
+                "DATA ISSUE\t%s\t%s\t%s",
+                record["001"].value(),
+                "First 6 characters of 008 were blank, populated with today's date",
+                record["008"],
+            )
+    else:
+        logger.warning("Field '008' not found in record. Skipping 008 population.")
+    return record
+
+
+def move_856z_to_856y(record: Record, **kwargs) -> Record:
+    """
+    Move subfield z from 856 fields to subfield y. This is useful when
+    importing records from the ABES SUDOC catalog.
+
+    Args:
+        record (Record): The MARC record to preprocess.
+    Returns:
+        Record: The preprocessed MARC record.
+    """
+    for field in record.get_fields("856"):
+        if "z" in field:
+            field.add_subfield("y", field["z"])
+            field.delete_subfield("z")
+            logger.log(
+                26,
+                "DATA ISSUE\t%s\t%s\t%s",
+                record["001"].value(),
+                f"Subfield z moved to subfield y in {field.tag}",
+                field,
+            )
     return record
 
 
