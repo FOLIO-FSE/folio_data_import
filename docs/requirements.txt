@@ -226,7 +226,7 @@ pyhumps==3.8.0
 pymarc==5.3.1
     # via folio-data-import
 pyrefly==0.39.3
-pytest==8.4.2
+pytest==9.0.3
     # via pytest-asyncio
 pytest-asyncio==1.2.0
 python-dateutil==2.9.0.post0
