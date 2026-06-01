@@ -800,36 +800,53 @@ class UserImporter:  # noqa: R0902
                 "skipping deletion\n"
             )
             return
-        try:
-            if existing_user:
+        if existing_user:
+            try:
                 await self.folio_client.folio_delete_async(
                     f"/users/{existing_user['id']}",
                 )
-            if existing_rp:
-                await self.folio_client.folio_delete_async(
-                    f"/request-preference-storage/request-preference/{existing_rp.get('id', '')}"
-                )
-            if existing_pu:
-                await self.folio_client.folio_delete_async(
-                    f"/perms/users/{existing_pu.get('id', '')}"
-                )
-            if existing_spu:
-                await self.folio_client.folio_delete_async(
-                    f"/service-points-users/{existing_spu.get('id', '')}"
-                )
-
-            if existing_user:
                 logger.debug(f"Row {line_number}: Deleted user {existing_user['id']}\n")
 
-            async with self.lock:
                 self.stats.deleted += 1
-        except folioclient.FolioError as ee:
-            logger.error(
-                f"Row {line_number}: Failed to delete user {existing_user['id']}: "
-                f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
-            )
-            async with self.lock:
+            except folioclient.FolioError as ee:
+                logger.exception(
+                    f"Row {line_number}: Failed to delete user {existing_user['id']}: "
+                    f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
+                )
                 self.stats.failed += 1
+            try:
+                if existing_rp:
+                    await self.folio_client.folio_delete_async(
+                        f"/request-preference-storage/request-preference/{existing_rp.get('id', '')}"
+                    )
+            except folioclient.FolioError as ee:
+                logger.exception(
+                    f"Row {line_number}: Failed to delete request preference for user "
+                    f"{existing_user['id']}: "
+                    f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
+                )
+            try:
+                if existing_pu:
+                    await self.folio_client.folio_delete_async(
+                        f"/perms/users/{existing_pu.get('id', '')}"
+                    )
+            except folioclient.FolioError as ee:
+                logger.exception(
+                    f"Row {line_number}: Failed to delete permission user for user "
+                    f"{existing_user['id']}: "
+                    f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
+                )
+            try:
+                if existing_spu:
+                    await self.folio_client.folio_delete_async(
+                        f"/service-points-users/{existing_spu.get('id', '')}"
+                    )
+            except folioclient.FolioError as ee:
+                logger.exception(
+                    f"Row {line_number}: Failed to delete service points user for user "
+                    f"{existing_user['id']}: "
+                    f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
+                )
 
     async def process_line(
         self,
