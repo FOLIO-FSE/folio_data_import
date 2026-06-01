@@ -246,7 +246,7 @@ pyzmq==27.1.0
     #   jupyter-client
 questionary==2.1.1
     # via folio-data-import
-requests==2.32.5
+requests==2.33.0
     # via sphinx
 rich==14.2.0
     # via
