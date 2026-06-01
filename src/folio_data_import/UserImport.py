@@ -152,6 +152,15 @@ class UserImporter:  # noqa: R0902
                 description="Whether to delete existing users, rather than create/update.",
             ),
         ] = False
+        delete_pus: Annotated[
+            bool,
+            Field(
+                title="Delete permission user objects when deleting users",
+                description=(
+                    "Whether to delete associated permission user objects when deleting users."
+                ),
+            ),
+        ] = False
 
     logfile: AsyncTextIOWrapper
     errorfile: AsyncTextIOWrapper
@@ -174,6 +183,7 @@ class UserImporter:  # noqa: R0902
             )
         else:
             self.reporter = reporter
+        self.delete_pus = config.delete_pus
         self.limit_simultaneous_requests = asyncio.Semaphore(config.limit_simultaneous_requests)
         # Build reference data maps (these need processing)
         self.patron_group_map: dict = self.build_ref_data_id_map(
@@ -827,7 +837,7 @@ class UserImporter:  # noqa: R0902
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
                 )
             try:
-                if existing_pu:
+                if existing_pu and self.delete_pus:
                     await self.folio_client.folio_delete_async(
                         f"/perms/users/{existing_pu.get('id', '')}"
                     )
