@@ -817,7 +817,8 @@ class UserImporter:  # noqa: R0902
             try:
                 if existing_rp:
                     await self.folio_client.folio_delete_async(
-                        f"/request-preference-storage/request-preference/{existing_rp.get('id', '')}"
+                        "/request-preference-storage/request-preference/"
+                        f"{existing_rp.get('id', '')}"
                     )
             except folioclient.FolioError as ee:
                 logger.exception(
