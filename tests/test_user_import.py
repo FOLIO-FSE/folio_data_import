@@ -1,4 +1,5 @@
-from unittest.mock import Mock
+import asyncio
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from folioclient import FolioClient
@@ -10,6 +11,15 @@ from folio_data_import.UserImport import UserImporter
 def folio_client():
     folio_client = Mock(spec=FolioClient)
     return folio_client
+
+
+def make_importer(folio_client, default_preferred_contact_type="002"):
+    folio_client.folio_get_all.return_value = []
+    config = UserImporter.Config(
+        library_name="Test Library",
+        default_preferred_contact_type=default_preferred_contact_type,
+    )
+    return UserImporter(folio_client, config)
 
 
 def test_build_ref_data_id_map(folio_client):
@@ -71,3 +81,35 @@ def test_build_ref_data_id_map(folio_client):
         "ServicePoint2": "200",
         "ServicePoint3": "300",
     }
+
+
+def test_normalize_preferred_contact_type_from_name(folio_client):
+    importer = make_importer(folio_client)
+    assert importer.normalize_preferred_contact_type("email") == "002"
+
+
+def test_normalize_preferred_contact_type_uses_numeric_default_when_invalid_input(folio_client):
+    importer = make_importer(folio_client, default_preferred_contact_type="005")
+    assert importer.normalize_preferred_contact_type("not-a-real-value") == "005"
+
+
+def test_normalize_preferred_contact_type_uses_named_default_when_invalid_input(folio_client):
+    importer = make_importer(folio_client, default_preferred_contact_type="phone")
+    assert importer.normalize_preferred_contact_type("not-a-real-value") == "004"
+
+
+def test_create_new_user_normalizes_preferred_contact_type(folio_client):
+    importer = make_importer(folio_client)
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {"id": "new-user-id"}
+    importer.http_client = Mock()
+    importer.http_client.post = AsyncMock(return_value=response)
+    importer.folio_client.okapi_headers = {"x-okapi-token": "test"}
+
+    user_obj = {"personal": {"preferredContactTypeId": "email"}}
+
+    created_user = asyncio.run(importer.create_new_user(user_obj))
+
+    assert user_obj["personal"]["preferredContactTypeId"] == "002"
+    assert created_user == {"id": "new-user-id"}

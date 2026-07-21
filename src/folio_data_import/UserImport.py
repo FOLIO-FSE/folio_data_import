@@ -42,6 +42,7 @@ PREFERRED_CONTACT_TYPES_MAP = {
     "004": "phone",
     "005": "mobile",
 }
+PREFERRED_CONTACT_TYPES_NAME_TO_ID = {v: k for k, v in PREFERRED_CONTACT_TYPES_MAP.items()}
 
 
 USER_MATCH_KEYS = ["username", "barcode", "externalSystemId"]
@@ -527,6 +528,8 @@ class UserImporter:  # noqa: R0902
         Raises:
             HTTPError: If the HTTP request to create the user fails.
         """
+        # Normalize preferred contact type to numeric ID before create.
+        await self.set_preferred_contact_type(user_obj, user_obj)
         response = await self.http_client.post(
             "/users",
             headers=self.folio_client.okapi_headers,
@@ -544,34 +547,47 @@ class UserImporter:  # noqa: R0902
         user object has a valid preferred contact type set. In that case, the existing preferred
         contact type is used.
         """
+        default_preferred_contact_type = self.normalize_preferred_contact_type(
+            self.config.default_preferred_contact_type
+        )
         if "personal" in user_obj and "preferredContactTypeId" in user_obj["personal"]:
             current_pref_contact = user_obj["personal"].get("preferredContactTypeId", "")
-            if mapped_contact_type := {v: k for k, v in PREFERRED_CONTACT_TYPES_MAP.items()}.get(
-                current_pref_contact,
-                "",
-            ):
-                existing_user["personal"]["preferredContactTypeId"] = mapped_contact_type
-            else:
-                existing_user["personal"]["preferredContactTypeId"] = (
-                    current_pref_contact
-                    if current_pref_contact in PREFERRED_CONTACT_TYPES_MAP
-                    else self.config.default_preferred_contact_type
-                )
+            if "personal" not in existing_user:
+                existing_user["personal"] = {}
+            existing_user["personal"][
+                "preferredContactTypeId"
+            ] = self.normalize_preferred_contact_type(current_pref_contact)
         else:
             logger.warning(
                 f"Preferred contact type not provided or is not a valid option: "
                 f"{PREFERRED_CONTACT_TYPES_MAP} Setting preferred contact type to "
                 f"{self.config.default_preferred_contact_type} or using existing value"
             )
-            mapped_contact_type = (
+            existing_contact_type = (
                 existing_user.get("personal", {}).get("preferredContactTypeId", "")
-                or self.config.default_preferred_contact_type
             )
             if "personal" not in existing_user:
                 existing_user["personal"] = {}
             existing_user["personal"]["preferredContactTypeId"] = (
-                mapped_contact_type or self.config.default_preferred_contact_type
+                self.normalize_preferred_contact_type(existing_contact_type)
+                if existing_contact_type
+                else default_preferred_contact_type
             )
+
+    def normalize_preferred_contact_type(self, preferred_contact_type: str) -> str:
+        """Normalize preferred contact type names/IDs to a valid numeric ID."""
+        if preferred_contact_type in PREFERRED_CONTACT_TYPES_MAP:
+            return preferred_contact_type
+
+        normalized_value = (preferred_contact_type or "").strip().lower()
+        if mapped_contact_type := PREFERRED_CONTACT_TYPES_NAME_TO_ID.get(normalized_value):
+            return mapped_contact_type
+
+        default_preferred_contact_type = self.config.default_preferred_contact_type
+        if default_preferred_contact_type in PREFERRED_CONTACT_TYPES_MAP:
+            return default_preferred_contact_type
+
+        return PREFERRED_CONTACT_TYPES_NAME_TO_ID.get(default_preferred_contact_type, "002")
 
     async def create_or_update_user(
         self, user_obj, existing_user, protected_fields, line_number: int
