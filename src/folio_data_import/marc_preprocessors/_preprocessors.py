@@ -676,6 +676,38 @@ def move_856z_to_856y(record: Record, **kwargs) -> Record:
     return record
 
 
+def normalize_subfield_codes(record: Record, **kwargs) -> Record:
+    """
+    Normalize subfield codes to lowercase. Fixes common import error in FOLIO. Preserves the order
+    of subfields in each field.
+
+    Args:
+        record (Record): The MARC record to preprocess.
+    Returns:
+        Record: The preprocessed MARC record.
+    """
+    record_id = _get_record_id(record, **kwargs)
+    for field in record.get_fields():
+        if not any(sf.code != sf.code.lower() for sf in field.subfields):
+            continue
+        normalized_subfields = []
+        for subfield in field.subfields:
+            if subfield.code != subfield.code.lower():
+                logger.log(
+                    26,
+                    "DATA ISSUE\t%s\t%s\t%s",
+                    record_id,
+                    f"Invalid subfield code {field.tag}${subfield.code}:"
+                    f" normalizing to ${subfield.code.lower()}",
+                    field,
+                )
+            normalized_subfields.append(
+                pymarc.field.Subfield(subfield.code.lower(), subfield.value)
+            )
+        field.subfields = normalized_subfields
+    return record
+
+
 def ordinal(n: int) -> str:
     s = ("th", "st", "nd", "rd") + ("th",) * 10
     v = n % 100
