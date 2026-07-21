@@ -554,17 +554,17 @@ class UserImporter:  # noqa: R0902
             current_pref_contact = user_obj["personal"].get("preferredContactTypeId", "")
             if "personal" not in existing_user:
                 existing_user["personal"] = {}
-            existing_user["personal"][
-                "preferredContactTypeId"
-            ] = self.normalize_preferred_contact_type(current_pref_contact)
+            existing_user["personal"]["preferredContactTypeId"] = (
+                self.normalize_preferred_contact_type(current_pref_contact)
+            )
         else:
             logger.warning(
                 f"Preferred contact type not provided or is not a valid option: "
                 f"{PREFERRED_CONTACT_TYPES_MAP} Setting preferred contact type to "
                 f"{self.config.default_preferred_contact_type} or using existing value"
             )
-            existing_contact_type = (
-                existing_user.get("personal", {}).get("preferredContactTypeId", "")
+            existing_contact_type = existing_user.get("personal", {}).get(
+                "preferredContactTypeId", ""
             )
             if "personal" not in existing_user:
                 existing_user["personal"] = {}
