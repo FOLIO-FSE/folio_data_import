@@ -5,6 +5,7 @@ from folio_data_import.marc_preprocessors._preprocessors import (
     MARCPreprocessor,
     clean_non_ff_999_fields,
     fix_bib_leader,
+    normalize_subfield_codes,
     prepend_prefix_001,
     prepend_ppn_prefix_001,
     prepend_abes_prefix_001,
@@ -277,3 +278,113 @@ def test_preprocessor_logs_unknown_when_id_field_absent(caplog):
     with caplog.at_level(26):
         record = preprocessor.do_work(record)
     assert 'UNKNOWN' in caplog.text
+
+
+# --- normalize_subfield_codes ---
+
+def test_normalize_subfield_codes_lowercases_uppercase_codes():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='245', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('A', 'Test title'),
+        pymarc.field.Subfield('B', 'subtitle'),
+    ]))
+    result = normalize_subfield_codes(record)
+    subfields = result['245'].subfields
+    assert all(sf.code == sf.code.lower() for sf in subfields)
+    assert subfields[0].code == 'a'
+    assert subfields[1].code == 'b'
+
+
+def test_normalize_subfield_codes_logs_data_issue_for_uppercase(caplog):
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='12345'))
+    record.add_field(pymarc.Field(tag='245', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('A', 'Test title'),
+    ]))
+    with caplog.at_level(26):
+        normalize_subfield_codes(record)
+    assert '245$A' in caplog.text
+    assert 'normalizing to $a' in caplog.text
+
+
+def test_normalize_subfield_codes_no_log_for_already_lowercase(caplog):
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='245', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', 'Test title'),
+    ]))
+    with caplog.at_level(26):
+        normalize_subfield_codes(record)
+    assert 'DATA ISSUE' not in caplog.text
+
+
+def test_normalize_subfield_codes_preserves_values():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='100', indicators=['1', ' '], subfields=[
+        pymarc.field.Subfield('A', 'Smith, John,'),
+        pymarc.field.Subfield('D', '1950-'),
+    ]))
+    result = normalize_subfield_codes(record)
+    subfields = result['100'].subfields
+    assert subfields[0].value == 'Smith, John,'
+    assert subfields[1].value == '1950-'
+
+
+def test_normalize_subfield_codes_preserves_order():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='650', indicators=[' ', '0'], subfields=[
+        pymarc.field.Subfield('A', 'History'),
+        pymarc.field.Subfield('Z', 'France'),
+        pymarc.field.Subfield('Y', '20th century'),
+    ]))
+    result = normalize_subfield_codes(record)
+    codes = [sf.code for sf in result['650'].subfields]
+    assert codes == ['a', 'z', 'y']
+
+
+def test_normalize_subfield_codes_already_lowercase_unchanged():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='035', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', 'ocn123456789'),
+    ]))
+    result = normalize_subfield_codes(record)
+    assert result['035']['a'] == 'ocn123456789'
+    assert result['035'].subfields[0].code == 'a'
+
+
+def test_normalize_subfield_codes_skips_control_fields():
+    """Control fields (001-009) have no subfields; function should not raise."""
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='12345'))
+    record.add_field(pymarc.Field(tag='245', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('A', 'Test'),
+    ]))
+    result = normalize_subfield_codes(record)
+    assert result['001'].data == '12345'
+    assert result['245'].subfields[0].code == 'a'
+
+
+def test_normalize_subfield_codes_mixed_case_multiple_fields():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='100', indicators=['1', ' '], subfields=[
+        pymarc.field.Subfield('A', 'Doe, Jane'),
+    ]))
+    record.add_field(pymarc.Field(tag='700', indicators=['1', ' '], subfields=[
+        pymarc.field.Subfield('A', 'Smith, Bob'),
+        pymarc.field.Subfield('E', 'editor'),
+    ]))
+    result = normalize_subfield_codes(record)
+    assert result['100'].subfields[0].code == 'a'
+    assert result['700'].subfields[0].code == 'a'
+    assert result['700'].subfields[1].code == 'e'
+
+
+def test_normalize_subfield_codes_via_preprocessor():
+    preprocessor = MARCPreprocessor("normalize_subfield_codes")
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='245', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('A', 'A test title /'),
+        pymarc.field.Subfield('C', 'by Jane Doe'),
+    ]))
+    result = preprocessor.do_work(record)
+    assert result['245']['a'] == 'A test title /'
+    assert result['245']['c'] == 'by Jane Doe'
