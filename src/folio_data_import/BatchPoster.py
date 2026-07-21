@@ -848,6 +848,7 @@ class BatchPoster:
         except folioclient.FolioClientError as e:
             logger.error(f"Batch failed: {e} - {e.response.text}")
             self.stats.records_failed += len(batch)
+            self.stats.batches_failed += 1
             self._write_failed_batch(batch)
 
             # Update progress bar if available
@@ -864,6 +865,7 @@ class BatchPoster:
         except folioclient.FolioConnectionError as e:
             logger.error(f"Batch failed due to connection error: {e}")
             self.stats.records_failed += len(batch)
+            self.stats.batches_failed += 1
             self._write_failed_batch(batch)
 
             # Update progress bar if available
