@@ -1,6 +1,18 @@
 import pytest
 import pymarc
-from folio_data_import.marc_preprocessors._preprocessors import *
+from folio_data_import.marc_preprocessors._preprocessors import (
+    _get_record_id,
+    MARCPreprocessor,
+    clean_non_ff_999_fields,
+    fix_bib_leader,
+    prepend_prefix_001,
+    prepend_ppn_prefix_001,
+    prepend_abes_prefix_001,
+    strip_999_ff_fields,
+    sudoc_supercede_prep,
+    clean_empty_fields,
+    clean_999_fields,
+)
 
 
 def test_prepend_ppn_prefix_001():
@@ -169,3 +181,99 @@ def test__get_preprocessor_functions():
     preprocessor_class = MARCPreprocessor("clean_999_fields,clean_empty_fields")
     assert preprocessor_class.preprocessors[0][0].__name__ == "clean_999_fields"
     assert preprocessor_class.preprocessors[1][0].__name__ == "clean_empty_fields"
+
+
+def test_get_record_id_default_001():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='123456'))
+    assert _get_record_id(record) == '123456'
+
+
+def test_get_record_id_custom_control_field():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='003', data='OCoLC'))
+    assert _get_record_id(record, record_id_field='003') == 'OCoLC'
+
+
+def test_get_record_id_custom_field_with_subfield():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='907', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', '.b123456789')
+    ]))
+    assert _get_record_id(record, record_id_field='907', record_id_subfield='a') == '.b123456789'
+
+
+def test_get_record_id_field_absent_returns_unknown():
+    record = pymarc.Record()
+    assert _get_record_id(record) == 'UNKNOWN'
+
+
+def test_get_record_id_subfield_absent_returns_unknown():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='907', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('b', 'something')
+    ]))
+    assert _get_record_id(record, record_id_field='907', record_id_subfield='a') == 'UNKNOWN'
+
+
+def test_get_record_id_empty_field_value_returns_unknown():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data=''))
+    assert _get_record_id(record) == 'UNKNOWN'
+
+
+def test_get_record_id_extra_kwargs_ignored():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='123456'))
+    assert _get_record_id(record, some_other_kwarg='foo') == '123456'
+
+
+# --- preprocessors using record_id_field / record_id_subfield ---
+
+def test_clean_non_ff_999_fields_custom_record_id(caplog):
+    """Preprocessor logs the 907$a value as identifier when 001 is absent."""
+    preprocessor = MARCPreprocessor(
+        "clean_non_ff_999_fields",
+        default={"record_id_field": "907", "record_id_subfield": "a"},
+    )
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='907', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', '.b987654321')
+    ]))
+    record.add_field(pymarc.Field(tag='999', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('i', 'Test')
+    ]))
+    with caplog.at_level(26):
+        record = preprocessor.do_work(record)
+    assert '.b987654321' in caplog.text
+    assert len(record.get_fields('945')) == 1
+
+
+def test_fix_bib_leader_custom_record_id(caplog):
+    """Preprocessor logs the 907$a value as identifier when 001 is absent."""
+    preprocessor = MARCPreprocessor(
+        "fix_bib_leader",
+        default={"record_id_field": "907", "record_id_subfield": "a"},
+    )
+    record = pymarc.Record()
+    record.leader = pymarc.Leader('01234mbm a2200349 a 4500')
+    record.add_field(pymarc.Field(tag='907', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', '.b111222333')
+    ]))
+    with caplog.at_level(26):
+        record = preprocessor.do_work(record)
+    assert '.b111222333' in caplog.text
+    assert record.leader[5] == 'c'
+    assert record.leader[6] == 'a'
+
+
+def test_preprocessor_logs_unknown_when_id_field_absent(caplog):
+    """Falls back to UNKNOWN when neither 001 nor the configured field is present."""
+    preprocessor = MARCPreprocessor("clean_non_ff_999_fields")
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='999', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('i', 'Test')
+    ]))
+    with caplog.at_level(26):
+        record = preprocessor.do_work(record)
+    assert 'UNKNOWN' in caplog.text
