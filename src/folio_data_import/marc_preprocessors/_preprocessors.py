@@ -708,6 +708,33 @@ def normalize_subfield_codes(record: Record, **kwargs) -> Record:
     return record
 
 
+def copy_240_to_245_if_no_245(record: Record, **kwargs) -> Record:
+    """
+    Copy subfields from 240 fields to 245 fields. This is a workaround for FOLIO requiring 245s.
+
+    Args:
+        record (Record): The MARC record to preprocess.
+    Returns:
+        Record: The preprocessed MARC record.
+    """
+    if "245" not in record and "240" in record:
+        logger.log(
+            26,
+            "DATA ISSUE\t%s\t%s\t%s",
+            _get_record_id(record, **kwargs),
+            "No 245 field found: copying subfields from 240 to 245",
+            record,
+        )
+        field_240 = record.get_fields("240")[0]
+        field_245 = pymarc.Field(
+            tag="245",
+            indicators=["0", "0"],
+            subfields=field_240.subfields,
+        )
+        record.add_ordered_field(field_245)
+    return record
+
+
 def ordinal(n: int) -> str:
     s = ("th", "st", "nd", "rd") + ("th",) * 10
     v = n % 100
