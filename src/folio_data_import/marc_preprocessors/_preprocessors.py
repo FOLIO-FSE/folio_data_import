@@ -11,6 +11,33 @@ from pymarc.record import Record
 logger = logging.getLogger("folio_data_import.MARCDataImport")
 
 
+def _get_record_id(
+    record: Record,
+    record_id_field: str = "001",
+    record_id_subfield: str | None = None,
+    **kwargs,
+) -> str:
+    """
+    Extract a record identifier from the specified field and optional subfield.
+    Returns 'UNKNOWN' if the field is absent or the subfield value is empty.
+
+    Args:
+        record (Record): The MARC record.
+        record_id_field (str): The tag of the field to use as the identifier. Defaults to '001'.
+        record_id_subfield (str | None): The subfield code to use. If None, uses the full field
+            value (appropriate for control fields). Defaults to None.
+
+    Returns:
+        str: The record identifier, or 'UNKNOWN' if not found.
+    """
+    field = record.get(record_id_field)
+    if field is None:
+        return "UNKNOWN"
+    if record_id_subfield is not None:
+        return field.get(record_id_subfield) or "UNKNOWN"
+    return field.value() or "UNKNOWN"
+
+
 class MARCPreprocessor:
     """
     A class to preprocess MARC records for data import into FOLIO.
@@ -234,7 +261,7 @@ def clean_non_ff_999_fields(record: Record, **kwargs) -> Record:
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                _get_record_id(record, **kwargs),
                 "Record contains a 999 field with non-ff indicators: Moving field to a 945 with"
                 ' indicators "99"',
                 field,
@@ -395,6 +422,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
         "856": ["u", "y", "z"],
     }
 
+    record_id = _get_record_id(record, **kwargs)
     for field in record.get_fields(*MAPPED_FIELDS.keys()):
         len_subs = len(field.subfields)
         subfield_value = (
@@ -404,7 +432,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                record_id,
                 f"{field.tag} is empty, removing field",
                 field,
             )
@@ -413,7 +441,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                record_id,
                 f"{field.tag}${field.subfields[0].code} is empty,"
                 " no other subfields present, removing field",
                 field,
@@ -424,7 +452,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
                 logger.log(
                     26,
                     "DATA ISSUE\t%s\t%s\t%s",
-                    record["001"].value(),
+                    record_id,
                     f"{field.tag}$a is empty, removing subfield",
                     field,
                 )
@@ -434,7 +462,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
                     logger.log(
                         26,
                         "DATA ISSUE\t%s\t%s\t%s",
-                        record["001"].value(),
+                        record_id,
                         f"{field.tag}${subfield.code} ({ordinal(idx)} subfield) is empty, but "
                         "other subfields have values, removing subfield",
                         field,
@@ -444,7 +472,7 @@ def clean_empty_fields(record: Record, **kwargs) -> Record:
                 logger.log(
                     26,
                     "DATA ISSUE\t%s\t%s\t%s",
-                    record["001"].value(),
+                    record_id,
                     f"{field.tag} has no non-empty subfields after cleaning, removing field",
                     field,
                 )
@@ -473,7 +501,7 @@ def clean_empty_contributors(record: Record, **kwargs) -> Record:
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                _get_record_id(record, **kwargs),
                 f"{field.tag} contributor field has empty name subfields, removing field",
                 field,
             )
@@ -494,11 +522,12 @@ def fix_bib_leader(record: Record, **kwargs) -> Record:
     """
     VALID_STATUSES = ["a", "c", "d", "n", "p"]
     VALID_TYPES = ["a", "c", "d", "e", "f", "g", "i", "j", "k", "m", "o", "p", "r", "t"]
+    record_id = _get_record_id(record, **kwargs)
     if record.leader[5] not in VALID_STATUSES:
         logger.log(
             26,
             "DATA ISSUE\t%s\t%s\t%s",
-            record["001"].value(),
+            record_id,
             f"Invalid record status: {record.leader[5]}, setting to 'c'",
             record.leader,
         )
@@ -507,7 +536,7 @@ def fix_bib_leader(record: Record, **kwargs) -> Record:
         logger.log(
             26,
             "DATA ISSUE\t%s\t%s\t%s",
-            record["001"].value(),
+            record_id,
             f"Invalid record type: {record.leader[6]}, setting to 'a'",
             record.leader,
         )
@@ -556,7 +585,7 @@ def move_authority_subfield_9_to_0_all_controllable_fields(record: Record, **kwa
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                _get_record_id(record, **kwargs),
                 f"Subfield 9 moved to subfield 0 in {field.tag}",
                 field,
             )
@@ -587,13 +616,14 @@ def remove_non_numeric_fields(record: Record, **kwargs) -> Record:
     Returns:
         Record: The preprocessed MARC record.
     """
+    record_id = _get_record_id(record, **kwargs)
     for field in record.get_fields():
         if not re.fullmatch(r"\d{3}", field.tag) or field.tag == "000":
             reason = "invalid tag 000" if field.tag == "000" else f"non-numeric tag {field.tag}"
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                record_id,
                 f"Field removed: {reason}",
                 field,
             )
@@ -613,7 +643,7 @@ def populate_blank_008_0_5(record: Record, **kwargs) -> Record:
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                _get_record_id(record, **kwargs),
                 "First 6 characters of 008 were blank, populated with today's date",
                 record["008"],
             )
@@ -639,7 +669,7 @@ def move_856z_to_856y(record: Record, **kwargs) -> Record:
             logger.log(
                 26,
                 "DATA ISSUE\t%s\t%s\t%s",
-                record["001"].value(),
+                _get_record_id(record, **kwargs),
                 f"Subfield z moved to subfield y in {field.tag}",
                 field,
             )
