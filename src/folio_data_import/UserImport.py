@@ -637,7 +637,7 @@ class UserImporter:  # noqa: R0902
 
     async def process_user_obj(self, user: str) -> dict:
         """
-        Process a user object. If not type is found in the source object, type is set to "patron".
+        Process a user object. If type is not found in the source object, type is set to "patron".
 
         Args:
             user (str): The user data to be processed, as a json string.
