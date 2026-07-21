@@ -6,6 +6,7 @@ from folio_data_import.marc_preprocessors._preprocessors import (
     clean_non_ff_999_fields,
     fix_bib_leader,
     normalize_subfield_codes,
+    copy_240_to_245_if_no_245,
     prepend_prefix_001,
     prepend_ppn_prefix_001,
     prepend_abes_prefix_001,
@@ -388,3 +389,83 @@ def test_normalize_subfield_codes_via_preprocessor():
     result = preprocessor.do_work(record)
     assert result['245']['a'] == 'A test title /'
     assert result['245']['c'] == 'by Jane Doe'
+
+
+# --- copy_240_to_245_if_no_245 ---
+
+def test_copy_240_to_245_if_no_245_copies_when_missing_title(caplog):
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='001', data='12345'))
+    record.add_field(pymarc.Field(tag='240', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'Uniform title'),
+        pymarc.field.Subfield('k', 'Selections'),
+    ]))
+
+    with caplog.at_level(26):
+        result = copy_240_to_245_if_no_245(record)
+
+    fields_245 = result.get_fields('245')
+    assert len(fields_245) == 1
+    assert fields_245[0].indicators == pymarc.Indicators(*['0', '0'])
+    assert [sf.code for sf in fields_245[0].subfields] == ['a', 'k']
+    assert [sf.value for sf in fields_245[0].subfields] == ['Uniform title', 'Selections']
+    assert 'No 245 field found: copying subfields from 240 to 245' in caplog.text
+
+
+def test_copy_240_to_245_if_no_245_uses_first_240_when_multiple():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='240', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'First uniform title'),
+    ]))
+    record.add_field(pymarc.Field(tag='240', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'Second uniform title'),
+    ]))
+
+    result = copy_240_to_245_if_no_245(record)
+
+    assert len(result.get_fields('245')) == 1
+    assert result['245']['a'] == 'First uniform title'
+
+
+def test_copy_240_to_245_if_no_245_noop_when_245_exists():
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='240', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'Uniform title'),
+    ]))
+    record.add_field(pymarc.Field(tag='245', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'Display title'),
+    ]))
+
+    result = copy_240_to_245_if_no_245(record)
+
+    assert len(result.get_fields('245')) == 1
+    assert result['245']['a'] == 'Display title'
+
+
+def test_copy_240_to_245_if_no_245_noop_without_240():
+    record = pymarc.Record()
+
+    result = copy_240_to_245_if_no_245(record)
+
+    assert len(result.get_fields('245')) == 0
+
+
+def test_copy_240_to_245_if_no_245_via_preprocessor_with_custom_record_id(caplog):
+    preprocessor = MARCPreprocessor(
+        "copy_240_to_245_if_no_245",
+        default={"record_id_field": "907", "record_id_subfield": "a"},
+    )
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='907', indicators=[' ', ' '], subfields=[
+        pymarc.field.Subfield('a', '.b24681012'),
+    ]))
+    record.add_field(pymarc.Field(tag='240', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'Uniform title for import'),
+    ]))
+
+    with caplog.at_level(26):
+        result = preprocessor.do_work(record)
+
+    assert len(result.get_fields('245')) == 1
+    assert result['245']['a'] == 'Uniform title for import'
+    assert '.b24681012' in caplog.text
