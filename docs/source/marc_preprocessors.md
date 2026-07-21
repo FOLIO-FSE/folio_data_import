@@ -55,10 +55,17 @@ The following preprocessors are built into folio-data-import:
 | `clean_999_fields` | Remove 999 ff fields, move other 999 fields to 945 | No |
 | `clean_non_ff_999_fields` | Move non-ff 999 fields to 945 with 99 indicators | No |
 | `clean_empty_fields` | Remove empty fields and subfields | No |
+| `clean_empty_contributors` | Remove contributor fields with all-empty name subfields | No |
 | `prepend_prefix_001` | Add prefix to 001 control number | Yes (`prefix`) |
 | `prepend_ppn_prefix_001` | Add "(PPN)" prefix to 001 | No |
 | `prepend_abes_prefix_001` | Add "(ABES)" prefix to 001 | No |
+| `remove_sudoc_prefixes` | Remove `(PPN)` and `(ABES)` prefixes from the 001 field | No |
 | `fix_bib_leader` | Fix invalid record type and status in leader | No |
+| `mark_deleted` | Mark the record as deleted (leader position 5 = `d`) | No |
+| `populate_blank_008_0_5` | Populate blank 008 date positions 0-5 with today's date | No |
+| `remove_non_numeric_fields` | Remove fields with non-numeric tags and invalid tag 000 | No |
+| `normalize_subfield_codes` | Normalize subfield codes to lowercase | No |
+| `move_856z_to_856y` | Move $z to $y in 856 fields | No |
 | `move_authority_subfield_9_to_0_all_controllable_fields` | Move $9 to $0 in authority-controlled fields | No |
 | `sudoc_supercede_prep` | Process ABES SUDOC records for superseding | No |
 
@@ -107,6 +114,16 @@ All removals are logged at custom level 26 for data issue reporting.
 --preprocessor "clean_empty_fields"
 ```
 
+#### `clean_empty_contributors`
+
+Removes contributor fields (100, 110, 111, 700, 710, 711) where all name subfields (`$a`, `$b`, `$c`, `$d`, `$q`) are empty or whitespace-only. These can cause data import mapping issues in FOLIO.
+
+Removals are logged at custom level 26.
+
+```bash
+--preprocessor "clean_empty_contributors"
+```
+
 ### Control Number Processing
 
 #### `prepend_prefix_001`
@@ -153,6 +170,16 @@ Prepends "(ABES)" to the 001 field. Useful for ABES SUDOC catalog records.
 --preprocessor "prepend_abes_prefix_001"
 ```
 
+#### `remove_sudoc_prefixes`
+
+Removes `(PPN)` and `(ABES)` prefixes from the 001 field. Useful when importing ABES SUDOC records where you want to match existing records in FOLIO that were loaded without those prefixes.
+
+**Result:** `(PPN)12345` becomes `12345`; `(ABES)12345` becomes `12345`
+
+```bash
+--preprocessor "remove_sudoc_prefixes"
+```
+
 ### Leader Fixes
 
 #### `fix_bib_leader`
@@ -166,6 +193,56 @@ Invalid values are logged at custom level 26.
 
 ```bash
 --preprocessor "fix_bib_leader"
+```
+
+#### `mark_deleted`
+
+Marks the record as deleted by setting leader position 5 to `d`. Use when you need to delete records in FOLIO by importing them with a deleted status.
+
+```bash
+--preprocessor "mark_deleted"
+```
+
+### Record Fixes
+
+#### `populate_blank_008_0_5`
+
+Populates the first 6 characters (date positions 0–5) of the 008 field with today's date in `YYMMDD` format if they are blank (all spaces). This is a workaround for a FOLIO issue ([MODQM-515](https://folio-org.atlassian.net/browse/MODQM-515)) where a blank 008 date causes import failures.
+
+The fix is logged at custom level 26.
+
+```bash
+--preprocessor "populate_blank_008_0_5"
+```
+
+#### `remove_non_numeric_fields`
+
+Removes all fields from the record that have non-numeric tags (i.e., tags that do not match the pattern `001`–`999`). Also removes the invalid tag `000`. Useful for cleaning records that contain non-standard local extensions.
+
+Removals are logged at custom level 26.
+
+```bash
+--preprocessor "remove_non_numeric_fields"
+```
+
+#### `normalize_subfield_codes`
+
+Normalizes all subfield codes to lowercase. Fixes a common import error in FOLIO caused by uppercase subfield codes. The order of subfields in each field is preserved.
+
+Normalizations are logged at custom level 26.
+
+```bash
+--preprocessor "normalize_subfield_codes"
+```
+
+#### `move_856z_to_856y`
+
+Moves `$z` (public note) to `$y` (link text) in all 856 fields.
+
+Each move is logged at custom level 26.
+
+```bash
+--preprocessor "move_856z_to_856y"
 ```
 
 ### Authority Field Processing
@@ -392,10 +469,14 @@ Resolution order:
 Many preprocessors log data issues at custom level 26 (between WARNING and ERROR). The CLI automatically generates data issues log files from these level 26 messages, compatible with folio_migration_tools data issues reports.
 
 Issues logged include:
-- Empty fields and subfields removed
-- Invalid leader values fixed
-- Authority subfields moved
-- 999 fields with non-ff indicators moved
+- Empty fields and subfields removed (via `clean_empty_fields`, `clean_empty_contributors`)
+- Invalid leader values fixed (via `fix_bib_leader`)
+- Authority subfields moved (via `move_authority_subfield_9_to_0_all_controllable_fields`)
+- 999 fields with non-ff indicators moved (via `clean_non_ff_999_fields`)
+- Non-numeric or invalid-tag fields removed (via `remove_non_numeric_fields`)
+- Blank 008 date populated (via `populate_blank_008_0_5`)
+- Uppercase subfield codes normalized (via `normalize_subfield_codes`)
+- 856 `$z` moved to `$y` (via `move_856z_to_856y`)
 
 Data issues are written to log files automatically during import - no additional configuration is required.
 
