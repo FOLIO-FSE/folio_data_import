@@ -347,6 +347,34 @@ Example failed record:
 
 Error details are logged to the console/log output, not written to the failed records file.
 
+### Data Issues Log
+
+In addition to the standard log and failed records file, user imports now emit a dedicated data issues log:
+
+- `data_issues_folio_user_import_TIMESTAMP.log`
+
+Entries follow the same tab-delimited pattern used by the MARC preprocessors and by folio_migration_tools-compatible workflows:
+
+```text
+DATA ISSUE<TAB>record-identifier<TAB>message<TAB>context
+RECORD FAILED<TAB>record-identifier<TAB>message<TAB>context
+```
+
+Example entries:
+
+```text
+DATA ISSUE	27:externalSystemId=abc-123	Department removed: "ArchivedDept" could not be mapped.	{"field":"departments[]","value":"ArchivedDept"}
+DATA ISSUE	27:externalSystemId=abc-123	Address removed: addressTypeId "Dormitory" could not be mapped.	{"field":"personal.addresses[].addressTypeId","value":"Dormitory","address":{"addressTypeId":"Dormitory","addressLine1":"12 West Hall"}}
+DATA ISSUE	27:externalSystemId=abc-123	Patron group removed: "visitingScholar" could not be mapped.	{"field":"patronGroup","value":"visitingScholar"}
+DATA ISSUE	27:externalSystemId=abc-123	Service point removed: "SCI-CIRC" could not be mapped.	{"field":"servicePointsUser.servicePointsIds[]","value":"SCI-CIRC"}
+DATA ISSUE	27:externalSystemId=abc-123	Default service point "MAIN" removed because it is not present in servicePointsIds.	{"field":"servicePointsUser.defaultServicePointId","value":"MAIN"}
+
+RECORD FAILED	27:externalSystemId=abc-123	User create failed. Unique field conflict in /users. Existing record already uses username="jdoe", barcode="123456".	{"httpStatus":422,"action":"create","folioError":"duplicate key value violates unique constraint"}
+RECORD FAILED	42:username=asmith	User update failed (HTTP 400): Validation failed for user payload	{"httpStatus":400,"action":"update","folioError":"Validation failed for user payload"}
+```
+
+The message text is designed to be human-friendly, especially for common `/users` uniqueness conflicts, while the context field preserves machine-readable details for troubleshooting.
+
 ### Custom Report Path
 
 ```bash

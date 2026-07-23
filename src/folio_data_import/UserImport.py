@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime as dt
 from io import TextIOWrapper
 from pathlib import Path
-from typing import Annotated, List, Literal, Tuple
+from typing import Annotated, Any, List, Literal, Tuple
 
 import aiofiles
 import cyclopts
@@ -18,7 +18,11 @@ import httpx
 from aiofiles.threadpool.text import AsyncTextIOWrapper
 from pydantic import BaseModel, Field
 
-from folio_data_import import get_folio_connection_parameters, set_up_cli_logging
+from folio_data_import import (
+    DATA_ISSUE_LVL_NUM,
+    get_folio_connection_parameters,
+    set_up_cli_logging,
+)
 from folio_data_import._progress import (
     NoOpProgressReporter,
     ProgressReporter,
@@ -238,6 +242,226 @@ class UserImporter:  # noqa: R0902
         except ValueError:
             return False
 
+    @staticmethod
+    def _serialize_data_issues_context(context: object) -> str:
+        if context in (None, ""):
+            return ""
+        if isinstance(context, str):
+            return context
+        try:
+            return json.dumps(context, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(context)
+
+    @staticmethod
+    def _get_nested_value(data: dict, path: str) -> str:
+        current = data
+        for part in path.split("."):
+            if not isinstance(current, dict):
+                return ""
+            current = current.get(part)
+        return current if isinstance(current, str) else ""
+
+    def _get_user_record_identifier(self, user_obj: dict, line_number: int | None = None) -> str:
+        candidate_keys = ["id", self.config.user_match_key, *USER_MATCH_KEYS]
+        seen = set()
+        for key in candidate_keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            value = user_obj.get(key)
+            if value:
+                if line_number is not None:
+                    return f"{line_number + 1}:{key}={value}"
+                return f"{key}={value}"
+        if line_number is not None:
+            return f"{line_number + 1}:UNKNOWN"
+        return "UNKNOWN"
+
+    def _log_data_issue(
+        self,
+        user_obj: dict,
+        line_number: int,
+        message: str,
+        context: object = "",
+    ) -> None:
+        logger.log(
+            DATA_ISSUE_LVL_NUM,
+            "DATA ISSUE\t%s\t%s\t%s",
+            self._get_user_record_identifier(user_obj, line_number),
+            message,
+            self._serialize_data_issues_context(context),
+        )
+
+    def _log_record_failed(
+        self,
+        user_obj: dict,
+        line_number: int,
+        message: str,
+        context: object = "",
+    ) -> None:
+        logger.log(
+            DATA_ISSUE_LVL_NUM,
+            "RECORD FAILED\t%s\t%s\t%s",
+            self._get_user_record_identifier(user_obj, line_number),
+            message,
+            self._serialize_data_issues_context(context),
+        )
+
+    def _extract_error_details(self, exc: Exception) -> tuple[int | None, str, dict[str, Any]]:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        error_text = str(getattr(response, "text", str(exc)))
+        payload = {}
+        if response is not None:
+            try:
+                payload = response.json() or {}
+            except (ValueError, TypeError):
+                payload = {}
+        if not payload and error_text:
+            try:
+                payload = json.loads(error_text)
+            except (TypeError, ValueError):
+                payload = {}
+        return status_code, error_text, payload
+
+    def _extract_folio_error_message(self, payload: dict[str, Any], fallback: str) -> str:
+        errors = payload.get("errors", []) if isinstance(payload, dict) else []
+        if isinstance(errors, list):
+            for error in errors:
+                if isinstance(error, dict):
+                    message = error.get("message")
+                    if message:
+                        return str(message)
+        return fallback
+
+    def _build_full_error_text(self, payload: dict[str, Any], error_text: str) -> str:
+        return " ".join(
+            [
+                error_text,
+                self._extract_folio_error_message(payload, ""),
+                json.dumps(payload, ensure_ascii=False) if payload else "",
+            ]
+        ).lower()
+
+    @staticmethod
+    def _is_unique_conflict_error(full_error: str) -> bool:
+        conflict_markers = [
+            "already exists",
+            "already assigned",
+            "duplicate",
+            "unique",
+            "conflict",
+            "violates unique",
+            "not unique",
+        ]
+        return any(marker in full_error for marker in conflict_markers)
+
+    def _get_unique_candidates(self, user_obj: dict) -> dict[str, str]:
+        return {
+            "username": user_obj.get("username", ""),
+            "barcode": user_obj.get("barcode", ""),
+            "externalSystemId": user_obj.get("externalSystemId", ""),
+            "personal.email": self._get_nested_value(user_obj, "personal.email"),
+        }
+
+    @staticmethod
+    def _find_conflict_matches_in_text(
+        unique_candidates: dict[str, str],
+        full_error: str,
+    ) -> list[tuple[str, str]]:
+        matches = []
+        for field, value in unique_candidates.items():
+            if not value:
+                continue
+            if field.lower() in full_error or str(value).lower() in full_error:
+                matches.append((field, value))
+        return matches
+
+    @staticmethod
+    def _extract_error_parameter_tokens(payload: dict[str, Any]) -> list[str]:
+        errors = payload.get("errors", []) if isinstance(payload, dict) else []
+        if not isinstance(errors, list):
+            return []
+
+        parameters = [
+            parameter
+            for error in errors
+            if isinstance(error, dict)
+            for parameter in error.get("parameters", [])
+            if isinstance(parameter, dict)
+        ]
+        return [
+            str(token).lower()
+            for parameter in parameters
+            for token in (parameter.get("key", ""), parameter.get("value", ""))
+            if token
+        ]
+
+    @staticmethod
+    def _is_candidate_in_error_tokens(field: str, value: str, tokens: list[str]) -> bool:
+        if not value:
+            return False
+        field_lc = field.lower()
+        value_lc = str(value).lower()
+        return any(field_lc in token or value_lc in token for token in tokens)
+
+    def _add_param_based_conflict_matches(
+        self,
+        matched: list[tuple[str, str]],
+        unique_candidates: dict[str, str],
+        payload: dict[str, Any],
+    ) -> None:
+        tokens = self._extract_error_parameter_tokens(payload)
+        for field, value in unique_candidates.items():
+            if (field, value) in matched:
+                continue
+            if self._is_candidate_in_error_tokens(field, value, tokens):
+                matched.append((field, value))
+
+    def _summarize_unique_conflict(
+        self,
+        user_obj: dict,
+        payload: dict[str, Any],
+        error_text: str,
+    ) -> str | None:
+        full_error = self._build_full_error_text(payload, error_text)
+        if not self._is_unique_conflict_error(full_error):
+            return None
+
+        unique_candidates = self._get_unique_candidates(user_obj)
+        matched = self._find_conflict_matches_in_text(unique_candidates, full_error)
+        self._add_param_based_conflict_matches(matched, unique_candidates, payload)
+
+        if matched:
+            details = ", ".join([f'{field}="{value}"' for field, value in matched])
+            return f"Unique field conflict in /users. Existing record already uses {details}."
+
+        return (
+            "Likely unique field conflict in /users. Check username, barcode, "
+            "externalSystemId, and personal.email for duplicates."
+        )
+
+    def _build_record_failed_message(
+        self,
+        action: Literal["create", "update"],
+        user_obj: dict,
+        payload: dict[str, Any],
+        error_text: str,
+        status_code: int | None,
+    ) -> str:
+        unique_conflict_message = self._summarize_unique_conflict(
+            user_obj,
+            payload,
+            error_text,
+        )
+        if unique_conflict_message:
+            return f"User {action} failed. {unique_conflict_message}"
+
+        status_hint = f" (HTTP {status_code})" if status_code else ""
+        folio_message = self._extract_folio_error_message(payload, error_text)
+        return f"User {action} failed{status_hint}: {folio_message}"
+
     async def setup(self, error_file_path: Path) -> None:
         """
         Sets up the importer by initializing necessary resources.
@@ -387,6 +611,19 @@ class UserImporter:  # noqa: R0902
                         mapped_addresses.append(address)
                 except KeyError:
                     if address["addressTypeId"] not in self.address_type_map.values():
+                        self._log_data_issue(
+                            user_obj,
+                            line_number,
+                            (
+                                "Address removed: addressTypeId "
+                                f'"{address["addressTypeId"]}" could not be mapped.'
+                            ),
+                            {
+                                "field": "personal.addresses[].addressTypeId",
+                                "value": address.get("addressTypeId", ""),
+                                "address": address,
+                            },
+                        )
                         logger.error(
                             f"Row {line_number}: Address type {address['addressTypeId']} not found"
                             f", removing address\n"
@@ -418,6 +655,15 @@ class UserImporter:  # noqa: R0902
                 user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
         except KeyError:
             if user_obj["patronGroup"] not in self.patron_group_map.values():
+                self._log_data_issue(
+                    user_obj,
+                    line_number,
+                    f'Patron group removed: "{user_obj["patronGroup"]}" could not be mapped.',
+                    {
+                        "field": "patronGroup",
+                        "value": user_obj.get("patronGroup", ""),
+                    },
+                )
                 logger.error(
                     f"Row {line_number}: Patron group {user_obj['patronGroup']} not found in, "
                     f"removing patron group\n"
@@ -446,6 +692,15 @@ class UserImporter:  # noqa: R0902
                 else:
                     mapped_departments.append(self.department_map[department])
             except KeyError:
+                self._log_data_issue(
+                    user_obj,
+                    line_number,
+                    f'Department removed: "{department}" could not be mapped.',
+                    {
+                        "field": "departments[]",
+                        "value": department,
+                    },
+                )
                 logger.error(
                     f'Row {line_number}: Department "{department}" not found, '  # noqa: B907
                     f"excluding department from user\n"
@@ -613,6 +868,19 @@ class UserImporter:  # noqa: R0902
                     self.stats.updated += 1
                 return existing_user
             except Exception as ee:
+                status_code, error_text, payload = self._extract_error_details(ee)
+                self._log_record_failed(
+                    user_obj,
+                    line_number,
+                    self._build_record_failed_message(
+                        "update", existing_user, payload, error_text, status_code
+                    ),
+                    {
+                        "httpStatus": status_code,
+                        "action": "update",
+                        "folioError": self._extract_folio_error_message(payload, error_text),
+                    },
+                )
                 logger.error(
                     f"Row {line_number}: User update failed: "
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
@@ -626,6 +894,19 @@ class UserImporter:  # noqa: R0902
                 new_user = await self.create_new_user(user_obj)
                 return new_user
             except Exception as ee:
+                status_code, error_text, payload = self._extract_error_details(ee)
+                self._log_record_failed(
+                    user_obj,
+                    line_number,
+                    self._build_record_failed_message(
+                        "create", user_obj, payload, error_text, status_code
+                    ),
+                    {
+                        "httpStatus": status_code,
+                        "action": "create",
+                        "folioError": self._extract_folio_error_message(payload, error_text),
+                    },
+                )
                 logger.error(
                     f"Row {line_number}: User creation failed: "
                     f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}\n"
@@ -944,9 +1225,11 @@ class UserImporter:  # noqa: R0902
                             f"{str(getattr(getattr(ee, 'response', str(ee)), 'text', str(ee)))}"
                         )
                         logger.error(pu_error_message)
-                await self.handle_service_points_user(spu_obj, existing_spu, new_user_obj)
+                await self.handle_service_points_user(
+                    spu_obj, existing_spu, new_user_obj, line_number
+                )
 
-    async def map_service_points(self, spu_obj, existing_user):
+    async def map_service_points(self, spu_obj, existing_user, line_number: int):
         """
         Maps the service points of a user object using the provided service point map.
 
@@ -967,6 +1250,15 @@ class UserImporter:  # noqa: R0902
                     else:
                         mapped_service_points.append(self.service_point_map[sp])
                 except KeyError:
+                    self._log_data_issue(
+                        existing_user,
+                        line_number,
+                        f'Service point removed: "{sp}" could not be mapped.',
+                        {
+                            "field": "servicePointsUser.servicePointsIds[]",
+                            "value": sp,
+                        },
+                    )
                     logger.error(
                         f'Service point "{sp}" not found, excluding service point from user: '
                         f"{self.service_point_map}"
@@ -982,6 +1274,18 @@ class UserImporter:  # noqa: R0902
                 else:
                     mapped_sp_id = self.service_point_map[sp_code]
                 if mapped_sp_id not in spu_obj.get("servicePointsIds", []):
+                    self._log_data_issue(
+                        existing_user,
+                        line_number,
+                        (
+                            f'Default service point "{sp_code}" removed because it is not '
+                            "present in servicePointsIds."
+                        ),
+                        {
+                            "field": "servicePointsUser.defaultServicePointId",
+                            "value": sp_code,
+                        },
+                    )
                     logger.warning(
                         f'Default service point "{sp_code}" not found in assigned service points, '
                         "excluding default service point from user"
@@ -989,12 +1293,21 @@ class UserImporter:  # noqa: R0902
                 else:
                     spu_obj["defaultServicePointId"] = mapped_sp_id
             except KeyError:
+                self._log_data_issue(
+                    existing_user,
+                    line_number,
+                    f'Default service point removed: "{sp_code}" could not be mapped.',
+                    {
+                        "field": "servicePointsUser.defaultServicePointId",
+                        "value": sp_code,
+                    },
+                )
                 logger.error(
                     f'Default service point "{sp_code}" not found, excluding default service '
                     f"point from user: {existing_user['id']}"
                 )
 
-    async def handle_service_points_user(self, spu_obj, existing_spu, existing_user):
+    async def handle_service_points_user(self, spu_obj, existing_spu, existing_user, line_number):
         """
         Handles processing a service-points-user object for a user.
 
@@ -1004,7 +1317,7 @@ class UserImporter:  # noqa: R0902
             existing_user (dict): The existing user object associated with the spu_obj.
         """
         if spu_obj:
-            await self.map_service_points(spu_obj, existing_user)
+            await self.map_service_points(spu_obj, existing_user, line_number)
             if existing_spu:
                 await self.update_existing_spu(spu_obj, existing_spu)
             else:
@@ -1316,7 +1629,7 @@ def main(
         yes (bool): Skip confirmation prompt for destructive operations (e.g. --delete-all).
         debug (bool): Enable debug logging.
     """  # noqa: E501
-    set_up_cli_logging(logger, "folio_user_import", debug, stream_level=logging.WARNING)
+    set_up_cli_logging(logger, "folio_user_import", debug, True, stream_level=logging.WARNING)
     fields_to_protect = fields_to_protect or ""
     protect_fields = [f.strip() for f in fields_to_protect.split(",") if f.strip()]
 

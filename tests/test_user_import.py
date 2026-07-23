@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from folioclient import FolioClient
 
+from folio_data_import import DATA_ISSUE_LVL_NUM
 from folio_data_import.UserImport import UserImporter
 
 
@@ -113,3 +114,53 @@ def test_create_new_user_normalizes_preferred_contact_type(folio_client):
 
     assert user_obj["personal"]["preferredContactTypeId"] == "002"
     assert created_user == {"id": "new-user-id"}
+
+
+def test_map_departments_logs_data_issue_for_unmapped_department(folio_client, caplog):
+    importer = make_importer(folio_client)
+    importer.department_map = {"Department1": "100"}
+    user_obj = {"username": "jdoe", "departments": ["Department1", "UnknownDept"]}
+
+    with caplog.at_level(DATA_ISSUE_LVL_NUM, logger="folio_data_import.UserImport"):
+        asyncio.run(importer.map_departments(user_obj, line_number=9))
+
+    assert user_obj["departments"] == ["100"]
+    data_issue_messages = [
+        record.message for record in caplog.records if record.levelno == DATA_ISSUE_LVL_NUM
+    ]
+    assert data_issue_messages
+    assert data_issue_messages[0].startswith("DATA ISSUE\t10:username=jdoe\tDepartment removed:")
+
+
+def test_build_record_failed_message_for_unique_conflict(folio_client):
+    importer = make_importer(folio_client)
+    user_obj = {
+        "username": "jdoe",
+        "barcode": "123456",
+        "externalSystemId": "abc-123",
+        "personal": {"email": "jdoe@example.org"},
+    }
+    payload = {
+        "errors": [
+            {
+                "message": "duplicate key value violates unique constraint",
+                "parameters": [
+                    {"key": "username", "value": "jdoe"},
+                    {"key": "barcode", "value": "123456"},
+                ],
+            }
+        ]
+    }
+
+    message = importer._build_record_failed_message(
+        "create",
+        user_obj,
+        payload,
+        "duplicate key value violates unique constraint",
+        422,
+    )
+
+    assert "User create failed." in message
+    assert "Unique field conflict in /users." in message
+    assert 'username="jdoe"' in message
+    assert 'barcode="123456"' in message
