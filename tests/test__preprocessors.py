@@ -450,6 +450,21 @@ def test_copy_240_to_245_if_no_245_noop_without_240():
     assert len(result.get_fields('245')) == 0
 
 
+def test_copy_240_to_245_if_no_245_empty_subfield_245(caplog):
+    record = pymarc.Record()
+    record.add_field(pymarc.Field(tag='245', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', ''),
+        pymarc.field.Subfield('b', ''),
+    ]))
+    record.add_field(pymarc.Field(tag='240', indicators=['1', '0'], subfields=[
+        pymarc.field.Subfield('a', 'Uniform title'),
+    ]))
+    result = copy_240_to_245_if_no_245(record)
+
+    assert len(result.get_fields('245')) == 1
+    assert result['245']['a'] == 'Uniform title'
+
+
 def test_copy_240_to_245_if_no_245_via_preprocessor_with_custom_record_id(caplog):
     preprocessor = MARCPreprocessor(
         "copy_240_to_245_if_no_245",

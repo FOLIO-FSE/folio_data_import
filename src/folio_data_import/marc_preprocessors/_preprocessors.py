@@ -717,7 +717,7 @@ def copy_240_to_245_if_no_245(record: Record, **kwargs) -> Record:
     Returns:
         Record: The preprocessed MARC record.
     """
-    if ("245" not in record or not (record.get("245", "").strip())) and "240" in record:
+    if ("245" not in record or not (record.get("245", "").value().strip())) and "240" in record:
         logger.log(
             26,
             "DATA ISSUE\t%s\t%s\t%s",
@@ -726,6 +726,7 @@ def copy_240_to_245_if_no_245(record: Record, **kwargs) -> Record:
             record.as_json(),
         )
         field_240 = record.get_fields("240")[0]
+        record.remove_fields("245")
         field_245 = pymarc.Field(
             tag="245",
             indicators=["0", "0"],
