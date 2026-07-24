@@ -166,6 +166,13 @@ class UserImporter:  # noqa: R0902
                 ),
             ),
         ] = False
+        handle_permissions_user_objects: Annotated[
+            bool,
+            Field(
+                title="Handle permission user objects",
+                description="Whether to handle permission user objects when updating users.",
+            ),
+        ] = True
 
     logfile: AsyncTextIOWrapper
     errorfile: AsyncTextIOWrapper
@@ -564,17 +571,19 @@ class UserImporter:  # noqa: R0902
         Returns:
             dict: The existing permission user object.
         """
-        try:
-            existing_pu = await self.http_client.get(
-                "/perms/users",
-                headers=self.folio_client.okapi_headers,
-                params={"query": f"userId=={existing_user.get('id', user_obj.get('id', ''))}"},
-            )
-            existing_pu.raise_for_status()
-            existing_pu = existing_pu.json().get("permissionUsers", [])
-            existing_pu = existing_pu[0] if existing_pu else {}
-        except httpx.HTTPError:
-            existing_pu = {}
+        existing_pu = {}
+        if self.config.handle_permissions_user_objects and existing_user.get("id"):
+            try:
+                existing_pu = await self.http_client.get(
+                    "/perms/users",
+                    headers=self.folio_client.okapi_headers,
+                    params={"query": f"userId=={existing_user.get('id', user_obj.get('id', ''))}"},
+                )
+                existing_pu.raise_for_status()
+                existing_pu = existing_pu.json().get("permissionUsers", [])
+                existing_pu = existing_pu[0] if existing_pu else {}
+            except httpx.HTTPError:
+                existing_pu = {}
         return existing_pu
 
     async def map_address_types(self, user_obj, line_number: int) -> None:
@@ -1077,6 +1086,12 @@ class UserImporter:  # noqa: R0902
         Returns:
             None
         """
+        if self.config.handle_permissions_user_objects is False:
+            logger.debug(
+                f"Skipping creation of permissions user for {new_user_obj['id']} "
+                "as handle_permissions_user_objects is set to False\n"
+            )
+            return
         perms_user_obj = {"userId": new_user_obj["id"], "permissions": []}
         response = await self.http_client.post(
             "/perms/users",
