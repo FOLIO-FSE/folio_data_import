@@ -176,7 +176,6 @@ class UserImporter:  # noqa: R0902
 
     logfile: AsyncTextIOWrapper
     errorfile: AsyncTextIOWrapper
-    http_client: httpx.AsyncClient
 
     def __init__(
         self,
@@ -212,8 +211,27 @@ class UserImporter:  # noqa: R0902
         )
         # Convert fields_to_protect to a set to dedupe
         self.fields_to_protect = set(config.fields_to_protect)
+        self._http_client_override: Any | None = None
         self.lock: asyncio.Lock = asyncio.Lock()
         self.stats = UserImporterStats()
+
+    @property
+    def http_client(self) -> httpx.AsyncClient:
+        """Return the shared FolioClient async HTTP client for this import run."""
+        if self._http_client_override is not None:
+            return self._http_client_override
+        async_httpx_client = getattr(self.folio_client, "async_httpx_client", None)
+        if not async_httpx_client or async_httpx_client.is_closed:
+            raise RuntimeError(
+                "FolioClient async session is not initialized. "
+                "Run UserImporter inside 'async with folio_client:'."
+            )
+        return async_httpx_client
+
+    @http_client.setter
+    def http_client(self, client: Any) -> None:
+        """Allow explicit client injection for tests and controlled overrides."""
+        self._http_client_override = client
 
     @staticmethod
     def build_ref_data_id_map(
@@ -484,7 +502,8 @@ class UserImporter:  # noqa: R0902
         Closes the importer by releasing any resources.
 
         """
-        await self.errorfile.close()
+        if hasattr(self, "errorfile") and not self.errorfile.closed:
+            await self.errorfile.close()
 
     async def do_import(self) -> None:
         """
@@ -493,24 +512,25 @@ class UserImporter:  # noqa: R0902
         This method triggers the process of importing users by calling the `process_file` method.
         Supports both single file path and list of file paths.
         """
-        async with self.folio_client.get_folio_http_client_async() as client:
-            self.http_client = client
-            if not self.config.user_file_paths:
-                raise FileNotFoundError("No user objects file provided")
+        if not self.config.user_file_paths:
+            raise FileNotFoundError("No user objects file provided")
 
-            # Normalize to list of paths
-            file_paths = (
-                [self.config.user_file_paths]
-                if isinstance(self.config.user_file_paths, Path)
-                else self.config.user_file_paths
-            )
+        # Validate FolioClient async session availability before processing.
+        _ = self.http_client
 
-            # Process each file
-            for idx, file_path in enumerate(file_paths, start=1):
-                if len(file_paths) > 1:
-                    logger.info(f"Processing file {idx} of {len(file_paths)}: {file_path.name}")
-                with open(file_path, "r", encoding="utf-8") as openfile:
-                    await self.process_file(openfile)
+        # Normalize to list of paths
+        file_paths = (
+            [self.config.user_file_paths]
+            if isinstance(self.config.user_file_paths, Path)
+            else self.config.user_file_paths
+        )
+
+        # Process each file
+        for idx, file_path in enumerate(file_paths, start=1):
+            if len(file_paths) > 1:
+                logger.info(f"Processing file {idx} of {len(file_paths)}: {file_path.name}")
+            with open(file_path, "r", encoding="utf-8") as openfile:
+                await self.process_file(openfile)
 
     async def get_existing_user(self, user_obj) -> dict:
         """
@@ -1731,8 +1751,9 @@ def pathify_user_file_paths(user_file_paths):
 
 async def run_user_importer(importer: UserImporter, error_file_path: Path):
     try:
-        await importer.setup(error_file_path)
-        await importer.do_import()
+        async with importer.folio_client:
+            await importer.setup(error_file_path)
+            await importer.do_import()
     except Exception as ee:
         logger.critical(f"An unknown error occurred: {ee}")
         sys.exit(1)
