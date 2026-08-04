@@ -967,6 +967,156 @@ class TestMARCSourceProtection:
             assert new_record["barcode"] == "NEW-BARCODE"
 
 
+class TestUpsertItemStatusPreservation:
+    """Regression tests for Item status preservation during upsert preparation."""
+
+    @pytest.mark.asyncio
+    async def test_non_patch_upsert_preserves_item_status_when_configured(
+        self, mock_folio_client
+    ):
+        """Existing status should win for Items when preserve_item_status is enabled."""
+        config = BatchPoster.Config(
+            object_type="Items",
+            upsert=True,
+            patch_existing_records=False,
+            preserve_item_status=True,
+        )
+        async with BatchPoster(mock_folio_client, config) as poster:
+            new_record = {
+                "id": "123",
+                "status": {"name": "Available"},
+                "barcode": "NEW-BARCODE",
+            }
+            existing_record = {
+                "id": "123",
+                "status": {"name": "Checked out"},
+                "barcode": "OLD-BARCODE",
+                "_version": 6,
+            }
+
+            poster.prepare_record_for_upsert(new_record, existing_record)
+
+            assert new_record["_version"] == 6
+            assert new_record["status"] == {"name": "Checked out"}
+
+    @pytest.mark.asyncio
+    async def test_non_patch_upsert_allows_item_status_overwrite_when_not_configured(
+        self, mock_folio_client
+    ):
+        """Incoming status should remain for Items when preserve_item_status is disabled."""
+        config = BatchPoster.Config(
+            object_type="Items",
+            upsert=True,
+            patch_existing_records=False,
+            preserve_item_status=False,
+        )
+        async with BatchPoster(mock_folio_client, config) as poster:
+            new_record = {
+                "id": "123",
+                "status": {"name": "Available"},
+                "barcode": "NEW-BARCODE",
+            }
+            existing_record = {
+                "id": "123",
+                "status": {"name": "Checked out"},
+                "barcode": "OLD-BARCODE",
+                "_version": 7,
+            }
+
+            poster.prepare_record_for_upsert(new_record, existing_record)
+
+            assert new_record["_version"] == 7
+            assert new_record["status"] == {"name": "Available"}
+
+    @pytest.mark.asyncio
+    async def test_patch_upsert_still_preserves_item_status_when_configured(
+        self, mock_folio_client
+    ):
+        """Patch-based upsert path should continue to preserve status when configured."""
+        config = BatchPoster.Config(
+            object_type="Items",
+            upsert=True,
+            patch_existing_records=True,
+            patch_paths=["barcode", "status"],
+            preserve_item_status=True,
+        )
+        async with BatchPoster(mock_folio_client, config) as poster:
+            new_record = {
+                "id": "123",
+                "status": {"name": "Available"},
+                "barcode": "NEW-BARCODE",
+            }
+            existing_record = {
+                "id": "123",
+                "status": {"name": "Checked out"},
+                "barcode": "OLD-BARCODE",
+                "_version": 8,
+            }
+
+            poster.prepare_record_for_upsert(new_record, existing_record)
+
+            assert new_record["_version"] == 8
+            assert new_record["status"] == {"name": "Checked out"}
+
+    @pytest.mark.asyncio
+    async def test_non_item_type_has_no_item_status_preservation_side_effects(
+        self, mock_folio_client
+    ):
+        """Non-Item object types should keep existing upsert preparation behavior."""
+        config = BatchPoster.Config(
+            object_type="Holdings",
+            upsert=True,
+            patch_existing_records=False,
+            preserve_item_status=True,
+        )
+        async with BatchPoster(mock_folio_client, config) as poster:
+            new_record = {
+                "id": "123",
+                "status": {"name": "Available"},
+                "callNumber": "QA76.73",
+            }
+            existing_record = {
+                "id": "123",
+                "status": {"name": "Checked out"},
+                "callNumber": "OLD",
+                "_version": 4,
+            }
+
+            poster.prepare_record_for_upsert(new_record, existing_record)
+
+            assert new_record["_version"] == 4
+            assert new_record["status"] == {"name": "Available"}
+
+    @pytest.mark.asyncio
+    async def test_marc_instance_restrictions_remain_unchanged(self, mock_folio_client):
+        """MARC Instance patch restrictions should remain unchanged."""
+        config = BatchPoster.Config(
+            object_type="Instances",
+            upsert=True,
+            patch_existing_records=True,
+            patch_paths=["title", "discoverySuppress"],
+        )
+        async with BatchPoster(mock_folio_client, config) as poster:
+            new_record = {
+                "id": "123",
+                "title": "New Title",
+                "discoverySuppress": True,
+            }
+            existing_record = {
+                "id": "123",
+                "source": "MARC",
+                "title": "Original Title",
+                "discoverySuppress": False,
+                "_version": 9,
+            }
+
+            poster.prepare_record_for_upsert(new_record, existing_record)
+
+            assert new_record["_version"] == 9
+            assert new_record["title"] == "Original Title"
+            assert new_record["discoverySuppress"] is True
+
+
 @pytest.mark.asyncio
 class TestShadowInstancesPostBatch:
     """Tests for ShadowInstances source conversion during post_batch."""

@@ -6,6 +6,7 @@ to FOLIO's inventory storage endpoints with support for upsert operations.
 """
 
 import asyncio
+from copy import deepcopy
 import glob as glob_module
 import json
 import logging
@@ -464,8 +465,8 @@ class BatchPoster:
             existing_record: The existing record to patch from
             patch_paths: List of fields in JSON Path notation to patch during upsert
         """
-        updates = {}
-        updates.update(existing_record)
+        # Work on a deep copy so nested merges do not mutate existing_record.
+        updates = deepcopy(existing_record)
         keep_existing: Dict[str, Any] = {}
 
         # Handle special field preservation rules
@@ -557,6 +558,11 @@ class BatchPoster:
         elif self.config.patch_existing_records:
             # Apply patching with user-specified paths
             self.patch_record(new_record, existing_record, self.config.patch_paths or [])
+
+        elif self.config.object_type == "Items":
+            # In non-patch upsert mode, Items still need field preservation from existing
+            # records (including conditional status preservation).
+            self.keep_existing_fields(new_record, existing_record)
 
     async def fetch_existing_records(self, record_ids: List[str]) -> Dict[str, dict]:
         """
