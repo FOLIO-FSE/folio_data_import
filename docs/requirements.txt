@@ -32,7 +32,7 @@ bandit==1.8.6
     # via flake8-bandit
 beautifulsoup4==4.14.3
     # via pydata-sphinx-theme
-black==25.9.0
+black==26.3.1
     # via flake8-black
 certifi==2025.10.5
     # via
