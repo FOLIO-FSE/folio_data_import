@@ -185,6 +185,20 @@ folio-data-import batch-poster \
 
 This updates **only** `barcode` and `materialTypeId` from your input file while preserving all other fields from the existing record.
 
+**Patch object:** Each record in your input file only needs to contain the record's `id` (used to match it to the existing FOLIO record) plus the fields listed in `--patch-paths`. Any other fields present in the input record are ignored - they are not merged into the existing record and do not need to be populated:
+
+```json
+{
+  "id": "7d0aa7a1-cea7-4f8a-9a4b-3e6d0f6e6c1b",
+  "barcode": "33433012345678",
+  "materialTypeId": "1a54b431-2e4f-452d-9cae-9cee66c9a892"
+}
+```
+
+```{note}
+**Conflict with item status preservation:** For Items, existing item status is preserved by default (unless `--overwrite-item-status` is set), and that preservation is applied *after* patch fields are merged. If you include `status` in `--patch-paths`, the patched value will be silently overwritten by the existing record's status. To actually patch item status via `--patch-paths`, you must also pass `--overwrite-item-status`.
+```
+
 ## Protected Fields
 
 ### Always-Preserved Fields
