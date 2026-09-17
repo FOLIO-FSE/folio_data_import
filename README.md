@@ -149,6 +149,18 @@ folio-data-import users --user-file users.jsonl --user-match-key username
 folio-data-import users --user-file users.jsonl --default-preferred-contact-type email
 ```
 
+**Custom Fields:** For select-type custom fields (single-select, multi-select, and radio button), values may be given as either the FOLIO option id (e.g. `opt_0`) or the human-friendly option label shown in the FOLIO UI:
+```json
+{
+    "username": "jdoe",
+    "customFields": {
+        "department_1": "Faculty",
+        "interests_1": ["Music", "Art"]
+    }
+}
+```
+Labels that can't be matched to a valid option are logged as a data issue and dropped from the record rather than failing the import.
+
 **Update Behavior:** Control how existing records are updated:
 
 > **⚠️ Breaking change in v0.6.0:** Prior versions incorrectly merged incoming records into existing records, preserving fields absent from the incoming data. Starting in v0.6.0, the default behavior is full replacement — fields not present in the incoming record are removed. If you depend on the previous merge behavior, use `--update-only-present-fields`.
