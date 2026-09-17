@@ -11,6 +11,7 @@ from folio_data_import.UserImport import UserImporter
 @pytest.fixture
 def folio_client():
     folio_client = Mock(spec=FolioClient)
+    folio_client.module_versions = []
     return folio_client
 
 
@@ -122,7 +123,7 @@ def test_map_departments_logs_data_issue_for_unmapped_department(folio_client, c
     user_obj = {"username": "jdoe", "departments": ["Department1", "UnknownDept"]}
 
     with caplog.at_level(DATA_ISSUE_LVL_NUM, logger="folio_data_import.UserImport"):
-        asyncio.run(importer.map_departments(user_obj, line_number=9))
+        importer.map_departments(user_obj, line_number=9)
 
     assert user_obj["departments"] == ["100"]
     data_issue_messages = [
@@ -130,6 +131,166 @@ def test_map_departments_logs_data_issue_for_unmapped_department(folio_client, c
     ]
     assert data_issue_messages
     assert data_issue_messages[0].startswith("DATA ISSUE\t10:username=jdoe\tDepartment removed:")
+
+
+def make_custom_fields_response(custom_fields):
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {
+        "customFields": custom_fields,
+        "totalRecords": len(custom_fields),
+    }
+    return response
+
+
+SINGLE_SELECT_FIELD = {
+    "refId": "department_1",
+    "type": "SINGLE_SELECT_DROPDOWN",
+    "selectField": {
+        "multiSelect": False,
+        "options": {
+            "values": [
+                {"id": "opt_0", "value": "Faculty"},
+                {"id": "opt_1", "value": "Staff"},
+            ]
+        },
+    },
+}
+
+MULTI_SELECT_FIELD = {
+    "refId": "interests_1",
+    "type": "MULTI_SELECT_DROPDOWN",
+    "selectField": {
+        "multiSelect": True,
+        "options": {
+            "values": [
+                {"id": "opt_0", "value": "Music"},
+                {"id": "opt_1", "value": "Art"},
+            ]
+        },
+    },
+}
+
+
+def test_build_custom_field_option_maps_resolves_select_fields(folio_client):
+    folio_client.module_versions = ["mod-users-19.4.0", "mod-other-1.0.0"]
+    folio_client.httpx_client = Mock()
+    folio_client.httpx_client.get.return_value = make_custom_fields_response(
+        [SINGLE_SELECT_FIELD, MULTI_SELECT_FIELD]
+    )
+
+    option_maps = UserImporter.build_custom_field_option_maps(folio_client)
+
+    assert option_maps == {
+        "department_1": {
+            "multi": False,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Faculty": "opt_0", "Staff": "opt_1"},
+        },
+        "interests_1": {
+            "multi": True,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Music": "opt_0", "Art": "opt_1"},
+        },
+    }
+    _, kwargs = folio_client.httpx_client.get.call_args
+    assert kwargs["headers"] == {"x-okapi-module-id": "mod-users-19.4.0"}
+
+
+def test_build_custom_field_option_maps_returns_empty_without_module_id(folio_client):
+    folio_client.module_versions = ["mod-other-1.0.0"]
+
+    option_maps = UserImporter.build_custom_field_option_maps(folio_client)
+
+    assert option_maps == {}
+
+
+def test_map_custom_fields_resolves_label_to_option_id(folio_client):
+    importer = make_importer(folio_client)
+    importer.custom_field_option_maps = {
+        "department_1": {
+            "multi": False,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Faculty": "opt_0", "Staff": "opt_1"},
+        }
+    }
+    user_obj = {"customFields": {"department_1": "Faculty"}}
+
+    importer.map_custom_fields(user_obj, line_number=1)
+
+    assert user_obj["customFields"]["department_1"] == "opt_0"
+
+
+def test_map_custom_fields_passes_through_existing_option_id(folio_client):
+    importer = make_importer(folio_client)
+    importer.custom_field_option_maps = {
+        "department_1": {
+            "multi": False,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Faculty": "opt_0", "Staff": "opt_1"},
+        }
+    }
+    user_obj = {"customFields": {"department_1": "opt_1"}}
+
+    importer.map_custom_fields(user_obj, line_number=1)
+
+    assert user_obj["customFields"]["department_1"] == "opt_1"
+
+
+def test_map_custom_fields_case_insensitive_fallback_match(folio_client):
+    importer = make_importer(folio_client)
+    importer.custom_field_option_maps = {
+        "department_1": {
+            "multi": False,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Faculty": "opt_0", "Staff": "opt_1"},
+        }
+    }
+    user_obj = {"customFields": {"department_1": " faculty "}}
+
+    importer.map_custom_fields(user_obj, line_number=1)
+
+    assert user_obj["customFields"]["department_1"] == "opt_0"
+
+
+def test_map_custom_fields_resolves_multi_select_list(folio_client):
+    importer = make_importer(folio_client)
+    importer.custom_field_option_maps = {
+        "interests_1": {
+            "multi": True,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Music": "opt_0", "Art": "opt_1"},
+        }
+    }
+    user_obj = {"customFields": {"interests_1": ["Music", "opt_1"]}}
+
+    importer.map_custom_fields(user_obj, line_number=1)
+
+    assert user_obj["customFields"]["interests_1"] == ["opt_0", "opt_1"]
+
+
+def test_map_custom_fields_logs_data_issue_for_unmapped_value(folio_client, caplog):
+    importer = make_importer(folio_client)
+    importer.custom_field_option_maps = {
+        "department_1": {
+            "multi": False,
+            "valid_ids": {"opt_0", "opt_1"},
+            "labels": {"Faculty": "opt_0", "Staff": "opt_1"},
+        }
+    }
+    user_obj = {"username": "jdoe", "customFields": {"department_1": "Not A Real Department"}}
+
+    with caplog.at_level(DATA_ISSUE_LVL_NUM, logger="folio_data_import.UserImport"):
+        importer.map_custom_fields(user_obj, line_number=9)
+
+    assert "department_1" not in user_obj["customFields"]
+    data_issue_messages = [
+        record.message for record in caplog.records if record.levelno == DATA_ISSUE_LVL_NUM
+    ]
+    assert data_issue_messages
+    assert data_issue_messages[0].startswith(
+        "DATA ISSUE\t10:username=jdoe\tCustom field value removed:"
+    )
 
 
 def test_build_record_failed_message_for_unique_conflict(folio_client):

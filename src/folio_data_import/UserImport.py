@@ -209,6 +209,9 @@ class UserImporter:  # noqa: R0902
         self.service_point_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/service-points", "servicepoints", "code"
         )
+        self.custom_field_option_maps: dict = self.build_custom_field_option_maps(
+            self.folio_client
+        )
         # Convert fields_to_protect to a set to dedupe
         self.fields_to_protect = set(config.fields_to_protect)
         self._http_client_override: Any | None = None
@@ -249,6 +252,102 @@ class UserImporter:  # noqa: R0902
             dict: A dictionary mapping reference data keys to their corresponding IDs.
         """
         return {x[name]: x["id"] for x in folio_client.folio_get_all(endpoint, key)}
+
+    SELECT_CUSTOM_FIELD_TYPES = {
+        "SINGLE_SELECT_DROPDOWN",
+        "MULTI_SELECT_DROPDOWN",
+        "RADIO_BUTTON_TYPE",
+        "RADIO_BUTTON",
+    }
+
+    @staticmethod
+    def _get_all_custom_fields(
+        folio_client: folioclient.FolioClient, module_id: str, limit: int = 1000
+    ) -> list:
+        """
+        Fetches all user custom field definitions, paginating past FOLIO's default
+        page-size limit.
+
+        Args:
+            folio_client (folioclient.FolioClient): A FolioClient object.
+            module_id (str): The mod-users module id, sent via the
+                'X-Okapi-Module-Id' header required by the shared custom-fields
+                interface.
+            limit (int): Page size to request per call.
+
+        Returns:
+            list: All custom field definition objects for the users module.
+        """
+        headers = {"x-okapi-module-id": module_id}
+        custom_fields: list = []
+        offset = 0
+        total_records = None
+        while total_records is None or offset < total_records:
+            response = folio_client.httpx_client.get(
+                "/custom-fields",
+                headers=headers,
+                params={"limit": limit, "offset": offset},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            page = payload.get("customFields", [])
+            custom_fields.extend(page)
+            total_records = payload.get("totalRecords", len(custom_fields))
+            offset += limit
+            if not page:
+                break
+        return custom_fields
+
+    @staticmethod
+    def build_custom_field_option_maps(folio_client: folioclient.FolioClient) -> dict:
+        """
+        Builds a map of select-type user custom fields to their option labels/ids.
+
+        The mod-users custom-fields endpoint is a shared interface that multiple
+        modules can implement, so the request must be disambiguated with an
+        'X-Okapi-Module-Id' header identifying the mod-users module instance.
+
+        Args:
+            folio_client (folioclient.FolioClient): A FolioClient object.
+
+        Returns:
+            dict: Mapping of custom field refId to a dict with keys:
+                "multi" (bool), "valid_ids" (set of option ids), and
+                "labels" (dict mapping option label -> option id).
+        """
+        try:
+            module_id = next(
+                (m for m in folio_client.module_versions if m.startswith("mod-users-")), None
+            )
+            if not module_id:
+                logger.warning(
+                    "Could not determine mod-users module id; skipping custom field "
+                    "select-option resolution. Custom field values must be supplied "
+                    "as option ids.\n"
+                )
+                return {}
+            custom_fields = UserImporter._get_all_custom_fields(folio_client, module_id)
+        except Exception as exc:  # noqa: W0718
+            logger.warning(
+                "Unable to retrieve user custom field definitions, skipping custom field "
+                f"select-option resolution. Custom field values must be supplied as option "
+                f"ids. Error: {exc}\n"
+            )
+            return {}
+        option_maps: dict = {}
+        for field in custom_fields:
+            if field.get("type") not in UserImporter.SELECT_CUSTOM_FIELD_TYPES:
+                continue
+            select_field = field.get("selectField", {})
+            values = select_field.get("options", {}).get("values", [])
+            option_maps[field["refId"]] = {
+                "multi": bool(
+                    select_field.get("multiSelect", field["type"] == "MULTI_SELECT_DROPDOWN")
+                ),
+                "valid_ids": {v["id"] for v in values},
+                "labels": {v["value"]: v["id"] for v in values},
+            }
+        return option_maps
 
     @staticmethod
     def validate_uuid(uuid_string: str) -> bool:
@@ -606,7 +705,7 @@ class UserImporter:  # noqa: R0902
                 existing_pu = {}
         return existing_pu
 
-    async def map_address_types(self, user_obj, line_number: int) -> None:
+    def map_address_types(self, user_obj, line_number: int) -> None:
         """
         Maps address type names in the user object to the corresponding ID in the address_type_map.
 
@@ -660,7 +759,7 @@ class UserImporter:  # noqa: R0902
             if mapped_addresses:
                 user_obj["personal"]["addresses"] = mapped_addresses
 
-    async def map_patron_groups(self, user_obj, line_number: int) -> None:
+    def map_patron_groups(self, user_obj, line_number: int) -> None:
         """
         Maps the patron group of a user object using the provided patron group map.
 
@@ -699,7 +798,7 @@ class UserImporter:  # noqa: R0902
                 )
                 del user_obj["patronGroup"]
 
-    async def map_departments(self, user_obj, line_number: int) -> None:
+    def map_departments(self, user_obj, line_number: int) -> None:
         """
         Maps the departments of a user object using the provided department map.
 
@@ -737,6 +836,88 @@ class UserImporter:  # noqa: R0902
         if mapped_departments:
             user_obj["departments"] = mapped_departments
 
+    def _resolve_custom_field_option(
+        self, ref_id: str, option_map: dict, value: str, user_obj, line_number: int
+    ) -> str | None:
+        """
+        Resolves a single select-type custom field value to its option id.
+
+        Accepts either the option id itself or its human-friendly label
+        (matched exactly, then case-insensitively as a fallback).
+
+        Returns:
+            str | None: The resolved option id, or None if it could not be resolved.
+        """
+        if value in option_map["valid_ids"]:
+            return value
+        if value in option_map["labels"]:
+            return option_map["labels"][value]
+        normalized_value = value.strip().casefold()
+        for label, option_id in option_map["labels"].items():
+            if label.casefold() == normalized_value:
+                return option_id
+        self._log_data_issue(
+            user_obj,
+            line_number,
+            f'Custom field value removed: "{value}" could not be mapped to a valid option '
+            f'for custom field "{ref_id}".',
+            {
+                "field": f"customFields.{ref_id}",
+                "value": value,
+            },
+        )
+        logger.error(
+            f'Row {line_number}: Value "{value}" for custom field "{ref_id}" not found, '  # noqa: B907
+            f"removing value\n"
+        )
+        return None
+
+    def map_custom_fields(self, user_obj, line_number: int) -> None:
+        """
+        Resolves human-friendly option labels to option ids for select-type
+        (single-select, multi-select, radio button) custom fields on a user
+        object. Values already supplied as option ids are left unchanged.
+        Custom fields not present in the option map (e.g. textbox, checkbox,
+        date picker types) are left untouched.
+
+        Args:
+            user_obj (dict): The user object to update.
+            line_number (int): The line number of the record being processed.
+
+        Returns:
+            None
+        """
+        custom_fields = user_obj.get("customFields")
+        if not custom_fields:
+            return
+        for ref_id, option_map in self.custom_field_option_maps.items():
+            if ref_id not in custom_fields:
+                continue
+            value = custom_fields[ref_id]
+            if option_map["multi"]:
+                resolved = [
+                    resolved_value
+                    for raw_value in value
+                    if (
+                        resolved_value := self._resolve_custom_field_option(
+                            ref_id, option_map, raw_value, user_obj, line_number
+                        )
+                    )
+                    is not None
+                ]
+                if resolved:
+                    custom_fields[ref_id] = resolved
+                else:
+                    del custom_fields[ref_id]
+            else:
+                resolved_value = self._resolve_custom_field_option(
+                    ref_id, option_map, value, user_obj, line_number
+                )
+                if resolved_value is not None:
+                    custom_fields[ref_id] = resolved_value
+                else:
+                    del custom_fields[ref_id]
+
     async def update_existing_user(
         self, user_obj, existing_user, protected_fields
     ) -> Tuple[dict, httpx.Response]:
@@ -756,7 +937,7 @@ class UserImporter:  # noqa: R0902
 
         """
 
-        await self.set_preferred_contact_type(user_obj, existing_user)
+        self.set_preferred_contact_type(user_obj, existing_user)
         preferred_contact_type = {
             "preferredContactTypeId": existing_user.get("personal", {}).pop(
                 "preferredContactTypeId"
@@ -813,7 +994,7 @@ class UserImporter:  # noqa: R0902
             HTTPError: If the HTTP request to create the user fails.
         """
         # Normalize preferred contact type to numeric ID before create.
-        await self.set_preferred_contact_type(user_obj, user_obj)
+        self.set_preferred_contact_type(user_obj, user_obj)
         response = await self.http_client.post(
             "/users",
             headers=self.folio_client.okapi_headers,
@@ -824,7 +1005,7 @@ class UserImporter:  # noqa: R0902
             self.stats.created += 1
         return response.json()
 
-    async def set_preferred_contact_type(self, user_obj, existing_user) -> None:
+    def set_preferred_contact_type(self, user_obj, existing_user) -> None:
         """
         Sets the preferred contact type for a user object. If the provided preferred contact type
         is not valid, the default preferred contact type is used, unless the previously existing
@@ -945,7 +1126,7 @@ class UserImporter:  # noqa: R0902
                     self.stats.failed += 1
                 return {}
 
-    async def process_user_obj(self, user: str) -> dict:
+    def process_user_obj(self, user: str) -> dict:
         """
         Process a user object. If type is not found in the source object, type is set to "patron".
 
@@ -960,7 +1141,7 @@ class UserImporter:  # noqa: R0902
         user_obj["type"] = user_obj.get("type", "patron")
         return user_obj
 
-    async def get_protected_fields(self, existing_user) -> dict:
+    def get_protected_fields(self, existing_user) -> dict:
         """
         Retrieves the protected fields from the existing user object,
         combining both the customFields.protectedFields list *and*
@@ -1015,7 +1196,7 @@ class UserImporter:  # noqa: R0902
             existing_rp = await self.get_existing_rp(user_obj, existing_user)
             existing_pu = await self.get_existing_pu(user_obj, existing_user)
             existing_spu = await self.get_existing_spu(existing_user)
-            protected_fields = await self.get_protected_fields(existing_user)
+            protected_fields = self.get_protected_fields(existing_user)
         else:
             existing_rp = {}
             existing_pu = {}
@@ -1211,7 +1392,7 @@ class UserImporter:  # noqa: R0902
 
         """
         async with self.limit_simultaneous_requests:
-            user_obj = await self.process_user_obj(user)
+            user_obj = self.process_user_obj(user)
             (
                 rp_obj,
                 spu_obj,
@@ -1227,9 +1408,10 @@ class UserImporter:  # noqa: R0902
                         existing_user, existing_rp, existing_pu, existing_spu, line_number
                     )
                 return
-            await self.map_address_types(user_obj, line_number)
-            await self.map_patron_groups(user_obj, line_number)
-            await self.map_departments(user_obj, line_number)
+            self.map_address_types(user_obj, line_number)
+            self.map_patron_groups(user_obj, line_number)
+            self.map_departments(user_obj, line_number)
+            self.map_custom_fields(user_obj, line_number)
             new_user_obj = await self.create_or_update_user(
                 user_obj, existing_user, protected_fields, line_number
             )
@@ -1264,7 +1446,7 @@ class UserImporter:  # noqa: R0902
                     spu_obj, existing_spu, new_user_obj, line_number
                 )
 
-    async def map_service_points(self, spu_obj, existing_user, line_number: int):
+    def map_service_points(self, spu_obj, existing_user, line_number: int):
         """
         Maps the service points of a user object using the provided service point map.
 
@@ -1352,7 +1534,7 @@ class UserImporter:  # noqa: R0902
             existing_user (dict): The existing user object associated with the spu_obj.
         """
         if spu_obj:
-            await self.map_service_points(spu_obj, existing_user, line_number)
+            self.map_service_points(spu_obj, existing_user, line_number)
             if existing_spu:
                 await self.update_existing_spu(spu_obj, existing_spu)
             else:
