@@ -261,44 +261,6 @@ class UserImporter:  # noqa: R0902
     }
 
     @staticmethod
-    def _get_all_custom_fields(
-        folio_client: folioclient.FolioClient, module_id: str, limit: int = 1000
-    ) -> list:
-        """
-        Fetches all user custom field definitions, paginating past FOLIO's default
-        page-size limit.
-
-        Args:
-            folio_client (folioclient.FolioClient): A FolioClient object.
-            module_id (str): The mod-users module id, sent via the
-                'X-Okapi-Module-Id' header required by the shared custom-fields
-                interface.
-            limit (int): Page size to request per call.
-
-        Returns:
-            list: All custom field definition objects for the users module.
-        """
-        headers = {"x-okapi-module-id": module_id}
-        custom_fields: list = []
-        offset = 0
-        total_records = None
-        while total_records is None or offset < total_records:
-            response = folio_client.httpx_client.get(
-                "/custom-fields",
-                headers=headers,
-                params={"limit": limit, "offset": offset},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            page = payload.get("customFields", [])
-            custom_fields.extend(page)
-            total_records = payload.get("totalRecords", len(custom_fields))
-            offset += limit
-            if not page:
-                break
-        return custom_fields
-
-    @staticmethod
     def build_custom_field_option_maps(folio_client: folioclient.FolioClient) -> dict:
         """
         Builds a map of select-type user custom fields to their option labels/ids.
@@ -307,9 +269,6 @@ class UserImporter:  # noqa: R0902
         modules can implement, so the request must be disambiguated with an
         'X-Okapi-Module-Id' header identifying the mod-users module instance.
 
-        Args:
-            folio_client (folioclient.FolioClient): A FolioClient object.
-
         Returns:
             dict: Mapping of custom field refId to a dict with keys:
                 "multi" (bool), "valid_ids" (set of option ids), and
@@ -317,7 +276,8 @@ class UserImporter:  # noqa: R0902
         """
         try:
             module_id = next(
-                (m for m in folio_client.module_versions if m.startswith("mod-users-")), None
+                (m for m in folio_client.module_versions if m.startswith("mod-users-")),
+                None,
             )
             if not module_id:
                 logger.warning(
@@ -326,7 +286,13 @@ class UserImporter:  # noqa: R0902
                     "as option ids.\n"
                 )
                 return {}
-            custom_fields = UserImporter._get_all_custom_fields(folio_client, module_id)
+            custom_fields = list(
+                folio_client.folio_get_all(
+                    "/custom-fields",
+                    "customFields",
+                    headers={"x-okapi-module-id": module_id},
+                )
+            )
         except Exception as exc:  # noqa: W0718
             logger.warning(
                 "Unable to retrieve user custom field definitions, skipping custom field "
