@@ -133,16 +133,6 @@ def test_map_departments_logs_data_issue_for_unmapped_department(folio_client, c
     assert data_issue_messages[0].startswith("DATA ISSUE\t10:username=jdoe\tDepartment removed:")
 
 
-def make_custom_fields_response(custom_fields):
-    response = Mock()
-    response.raise_for_status = Mock()
-    response.json.return_value = {
-        "customFields": custom_fields,
-        "totalRecords": len(custom_fields),
-    }
-    return response
-
-
 SINGLE_SELECT_FIELD = {
     "refId": "department_1",
     "type": "SINGLE_SELECT_DROPDOWN",
@@ -174,10 +164,7 @@ MULTI_SELECT_FIELD = {
 
 def test_build_custom_field_option_maps_resolves_select_fields(folio_client):
     folio_client.module_versions = ["mod-users-19.4.0", "mod-other-1.0.0"]
-    folio_client.httpx_client = Mock()
-    folio_client.httpx_client.get.return_value = make_custom_fields_response(
-        [SINGLE_SELECT_FIELD, MULTI_SELECT_FIELD]
-    )
+    folio_client.folio_get_all.return_value = [SINGLE_SELECT_FIELD, MULTI_SELECT_FIELD]
 
     option_maps = UserImporter.build_custom_field_option_maps(folio_client)
 
@@ -193,12 +180,28 @@ def test_build_custom_field_option_maps_resolves_select_fields(folio_client):
             "labels": {"Music": "opt_0", "Art": "opt_1"},
         },
     }
-    _, kwargs = folio_client.httpx_client.get.call_args
-    assert kwargs["headers"] == {"x-okapi-module-id": "mod-users-19.4.0"}
+    folio_client.folio_get_all.assert_called_once_with(
+        "/custom-fields",
+        "customFields",
+        headers={"x-okapi-module-id": "mod-users-19.4.0"},
+    )
 
 
 def test_build_custom_field_option_maps_returns_empty_without_module_id(folio_client):
     folio_client.module_versions = ["mod-other-1.0.0"]
+
+    option_maps = UserImporter.build_custom_field_option_maps(folio_client)
+
+    assert option_maps == {}
+    folio_client.folio_get_all.assert_not_called()
+
+
+def test_build_custom_field_option_maps_warns_and_returns_empty_on_error(folio_client, caplog):
+    # folio_get_all (via folioclient's own use_client_session) is responsible for
+    # session self-healing now; this test just confirms we degrade gracefully if
+    # the request fails for any reason, rather than crashing user import.
+    folio_client.module_versions = ["mod-users-19.4.0"]
+    folio_client.folio_get_all.side_effect = RuntimeError("boom")
 
     option_maps = UserImporter.build_custom_field_option_maps(folio_client)
 
