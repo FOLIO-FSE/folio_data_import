@@ -108,6 +108,10 @@ This tool does **not** support the full mod-user-import payload format (which wr
 This tool does **not** support creating custom field definitions or department definitions. These must already exist in FOLIO.
 ```
 
+```{note}
+For select-type custom fields (single-select, multi-select, radio button), values may be supplied as either the option's human-friendly label or its FOLIO-assigned option id. See [Custom Fields](#custom-fields) below.
+```
+
 Example `users.jsonl`:
 
 ```json
@@ -157,6 +161,25 @@ You can use either the human-friendly name or the UUID directly:
 ```text
 {"patronGroup": "undergraduate", ...}
 {"patronGroup": "54e17c4c-e315-4c99-9bb6-6c2f31e3a9e5", ...}
+```
+
+## Custom Fields
+
+Custom field definitions (and their select options) must already exist in FOLIO — this tool does not create them.
+
+For select-type custom fields (`SINGLE_SELECT_DROPDOWN`, `MULTI_SELECT_DROPDOWN`, `RADIO_BUTTON_TYPE`/`RADIO_BUTTON`), the importer resolves human-friendly option labels to the option ids FOLIO expects, so input files can use the same labels staff see in the FOLIO UI instead of opaque generated ids:
+
+```json
+{"username": "jdoe", "externalSystemId": "12345", "active": true, "patronGroup": "undergraduate", "personal": {"lastName": "Doe", "firstName": "John"}, "customFields": {"department_1": "Faculty", "interests_1": ["Music", "Art"]}}
+```
+
+- Multi-select fields accept an array of labels (or ids); single-select and radio button fields accept a single label (or id).
+- A value that already matches an option id is passed through unchanged.
+- Label matching is exact first, then falls back to a case-insensitive, whitespace-trimmed match.
+- A value that cannot be matched to any option (by id or label) is dropped from the record, and a `Custom field value removed` entry is written to the [data issues log](#data-issues-log) rather than failing the whole record.
+
+```{note}
+Label resolution requires the importer to identify the `mod-users` module version on the tenant (to disambiguate the shared `/custom-fields` endpoint) and to fetch the field definitions successfully. If either step fails, the importer logs a warning and falls back to requiring option ids for select-type custom fields for that run; textbox, checkbox, and date picker custom fields are unaffected either way.
 ```
 
 ## User Matching
@@ -482,7 +505,7 @@ folio-data-import users \
 | Field protection | `updateOnlyPresentFields` (top-level fields preserved; addresses deep-merged by type) | Job-level and per-record for any field |
 | Contact type | `mail`, `email`, `text`, `phone`, `mobile` | Same values plus IDs (`001`-`005`) |
 | Match key | `externalSystemId` only | Configurable with forced matching on `id` |
-| Custom fields | Can define and manage via `included` | Values only (definitions must exist in FOLIO) |
+| Custom fields | Can define and manage via `included` | Values only (definitions must exist in FOLIO); select-type fields accept human-friendly labels |
 | Departments | Can create via `included` | Values only (must already exist in FOLIO) |
 | Request preferences | Per-user with delivery/fulfillment settings | Auto-created for new users |
 | Batch processing | Single request | Configurable batch size (default 250) |
