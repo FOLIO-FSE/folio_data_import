@@ -328,3 +328,168 @@ def test_build_record_failed_message_for_unique_conflict(folio_client):
     assert "Unique field conflict in /users." in message
     assert 'username="jdoe"' in message
     assert 'barcode="123456"' in message
+
+
+def test_handle_permissions_user_objects_defaults_to_true():
+    assert UserImporter.Config(library_name="Test Library").handle_permissions_user_objects is True
+
+
+def test_get_existing_pu_skipped_when_permissions_ignored(folio_client):
+    importer = make_importer(folio_client)
+    importer.config.handle_permissions_user_objects = False
+    importer.http_client = Mock()
+    importer.http_client.get = AsyncMock()
+
+    result = asyncio.run(importer.get_existing_pu({"id": "u1"}, {"id": "u1"}))
+
+    assert result == {}
+    importer.http_client.get.assert_not_called()
+
+
+def test_create_perms_user_skipped_when_permissions_ignored(folio_client):
+    importer = make_importer(folio_client)
+    importer.config.handle_permissions_user_objects = False
+    importer.http_client = Mock()
+    importer.http_client.post = AsyncMock()
+
+    asyncio.run(importer.create_perms_user({"id": "u1"}))
+
+    importer.http_client.post.assert_not_called()
+
+
+def test_create_perms_user_posts_by_default(folio_client):
+    importer = make_importer(folio_client)
+    response = Mock()
+    importer.http_client = Mock()
+    importer.http_client.post = AsyncMock(return_value=response)
+
+    asyncio.run(importer.create_perms_user({"id": "u1"}))
+
+    importer.http_client.post.assert_awaited_once()
+    assert importer.http_client.post.await_args.args[0] == "/perms/users"
+    assert importer.http_client.post.await_args.kwargs["json"] == {
+        "userId": "u1",
+        "permissions": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "extra_args, expected",
+    [([], True), (["--ignore-permissions-user-objects"], False)],
+)
+def test_cli_ignore_permissions_user_objects_flag(extra_args, expected, tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from folio_data_import import UserImport
+
+    monkeypatch.chdir(tmp_path)
+    user_file = tmp_path / "users.jsonl"
+    user_file.write_text("{}\n")
+    captured = {}
+
+    def fake_init(self, folio_client, config, reporter=None):
+        captured["config"] = config
+
+    with (
+        patch.object(UserImport.folioclient, "FolioClient"),
+        patch.object(UserImporter, "__init__", fake_init),
+        patch.object(UserImport, "run_user_importer", AsyncMock()),
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            UserImport.app(
+                [
+                    "--gateway-url",
+                    "https://example.org",
+                    "--tenant-id",
+                    "t",
+                    "--username",
+                    "u",
+                    "--password",
+                    "p",
+                    "--library-name",
+                    "Test Library",
+                    "--user-file-path",
+                    str(user_file),
+                    "--report-file-base-path",
+                    str(tmp_path),
+                    *extra_args,
+                ],
+                exit_on_error=False,
+            )
+
+    assert exc_info.value.code == 0
+    assert captured["config"].handle_permissions_user_objects is expected
+
+
+def _run_cli_with_config_file(config_data, extra_args, tmp_path, monkeypatch):
+    import json
+    from unittest.mock import patch
+
+    from folio_data_import import UserImport
+
+    monkeypatch.chdir(tmp_path)
+    user_file = tmp_path / "users.jsonl"
+    user_file.write_text("{}\n")
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {"library_name": "Test Library", "user_file_paths": [str(user_file)]} | config_data
+        )
+    )
+    captured = {}
+
+    def fake_init(self, folio_client, config, reporter=None):
+        captured["config"] = config
+
+    with (
+        patch.object(UserImport.folioclient, "FolioClient"),
+        patch.object(UserImporter, "__init__", fake_init),
+        patch.object(UserImport, "run_user_importer", AsyncMock()),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        UserImport.app(
+            [
+                "--gateway-url",
+                "https://example.org",
+                "--tenant-id",
+                "t",
+                "--username",
+                "u",
+                "--password",
+                "p",
+                "--config-file",
+                str(config_file),
+                "--report-file-base-path",
+                str(tmp_path),
+                *extra_args,
+            ],
+            exit_on_error=False,
+        )
+    return captured, exc_info.value.code
+
+
+@pytest.mark.parametrize(
+    "config_value, extra_args, expected",
+    [
+        (True, ["--yes"], True),  # config value respected without the CLI flag
+        (True, ["--yes", "--delete-all"], True),
+        (False, ["--yes", "--delete-all"], True),  # CLI flag can enable
+        (False, [], False),
+    ],
+)
+def test_cli_delete_all_config_file_precedence(
+    config_value, extra_args, expected, tmp_path, monkeypatch
+):
+    captured, code = _run_cli_with_config_file(
+        {"delete_all": config_value}, extra_args, tmp_path, monkeypatch
+    )
+    assert code == 0
+    assert captured["config"].delete_all is expected
+
+
+def test_cli_config_file_delete_all_requires_confirmation(tmp_path, monkeypatch):
+    # Non-interactive stdin and no --yes: a config-driven delete must not proceed unprompted
+    monkeypatch.setattr("sys.stdin", Mock(isatty=Mock(return_value=False)))
+    captured, code = _run_cli_with_config_file({"delete_all": True}, [], tmp_path, monkeypatch)
+    assert code == 1
+    assert "config" not in captured

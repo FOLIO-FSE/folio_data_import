@@ -1786,6 +1786,17 @@ def main(
             name=["--debug"], group="General Parameters", help="Enable debug logging"
         ),
     ] = False,
+    ignore_permissions_user_objects: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=["--ignore-permissions-user-objects"],
+            group="Job Configuration Parameters",
+            help=(
+                "Ignore creation or update of objects at the permissions-user endpoints "
+                "(set to avoid timeouts and poor performance on Eureka systems)"
+            ),
+        ),
+    ] = False,
 ) -> None:
     """
     Command-line interface to batch import users into FOLIO
@@ -1811,6 +1822,8 @@ def main(
         no_progress (bool): Whether to disable the progress bar.
         yes (bool): Skip confirmation prompt for destructive operations (e.g. --delete-all).
         debug (bool): Enable debug logging.
+        ignore_permissions_user_objects (bool): Skip creating or updating objects at the
+            permissions-user endpoints.
     """  # noqa: E501
     set_up_cli_logging(logger, "folio_user_import", debug, True, stream_level=logging.WARNING)
     fields_to_protect = fields_to_protect or ""
@@ -1830,24 +1843,14 @@ def main(
         report_file_base_path / f"failed_user_import_{dt.now(utc).strftime('%Y%m%d_%H%M%S')}.txt"
     )
 
-    if delete_all:
-        logger.warning(
-            "--delete-all flag is set. Users present in the provided file(s) will be "
-            "deleted rather than created or updated. Proceed with caution."
-        )
-        if not yes:
-            if not sys.stdin.isatty():
-                logger.critical("--delete-all requires --yes/-y flag in non-interactive mode.")
-                sys.exit(1)
-            input("Press Enter to proceed with deletions, or Ctrl+C to abort...")
-
     config_data = {}
     if config_file:
         try:
             with open(config_file, "r") as f:
                 config_data = json.load(f)
-                # CLI flags override config file values
-                config_data["delete_all"] = delete_all
+                # CLI flag can enable delete_all, but never disables a config file value
+                if delete_all:
+                    config_data["delete_all"] = True
                 config = UserImporter.Config(**config_data)
         except Exception as e:
             logger.critical(f"Failed to load configuration file {config_file}: {e}")
@@ -1870,7 +1873,19 @@ def main(
             user_file_paths=file_paths_list,
             no_progress=no_progress,
             delete_all=delete_all,
+            handle_permissions_user_objects=not ignore_permissions_user_objects,
         )
+    if config.delete_all:
+        logger.warning(
+            "Delete-all mode is set. Users present in the provided file(s) will be "
+            "deleted rather than created or updated. Proceed with caution."
+        )
+        if not yes:
+            if not sys.stdin.isatty():
+                logger.critical("Delete-all requires --yes/-y flag in non-interactive mode.")
+                sys.exit(1)
+            input("Press Enter to proceed with deletions, or Ctrl+C to abort...")
+
     try:
         importer = UserImporter(folio_client, config)
         asyncio.run(run_user_importer(importer, error_file_path))
