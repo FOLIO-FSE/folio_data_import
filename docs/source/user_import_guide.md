@@ -77,10 +77,28 @@ Example `config.json`:
 | `--update-only-present-fields` | - | `false` | Only update fields present in input |
 | `--delete-all` | `FOLIO_DELETE_ALL_USERS` | `false` | Delete users in file(s) instead of creating/updating |
 | `--limit-async-requests` | `FOLIO_LIMIT_ASYNC_REQUESTS` | 10 | Max concurrent HTTP requests (1-100) |
+| `--ignore-permissions-user-objects` | - | `false` | Do not look up or create objects at the `/perms/users` endpoints (see below) |
 | `--report-file-base-path` | - | Current directory | Base path for report files |
 | `--config-file` | - | (none) | Path to JSON config file (overrides CLI parameters) |
 | `--yes` / `-y` | - | `false` | Skip confirmation prompt for destructive operations (e.g. `--delete-all`) |
 | `--no-progress` | - | `false` | Disable progress display |
+
+### Ignoring Permissions User Objects
+
+By default, the importer looks up each existing user's permissions user object and creates one for newly created users. On Eureka systems these `/perms/users` calls can be slow and may time out. Pass `--ignore-permissions-user-objects` to skip them entirely:
+
+```bash
+folio-data-import users \
+  --library-name "My Library" \
+  --user-file-path users.jsonl \
+  --ignore-permissions-user-objects
+```
+
+In a config file, the equivalent setting is `"handle_permissions_user_objects": false` (note the inverted sense). The CLI flag is **not** applied when `--config-file` is used; set the key in the file instead.
+
+```{note}
+Because the permissions user lookup is skipped, permissions user objects are also not deleted when deleting users, even if `delete_pus` is set.
+```
 
 ### Preferred Contact Types
 
@@ -293,7 +311,7 @@ Or via a config file:
 ```
 
 ```{note}
-The `--delete-all` CLI flag overrides the config file value when both are specified.
+`"delete_all": true` in the config file is honored on its own; the `--delete-all` CLI flag (or `FOLIO_DELETE_ALL_USERS`) can additionally enable it, but cannot disable a value set in the file. The `--yes` confirmation applies either way.
 ```
 
 ### How Deletion Works
