@@ -52,6 +52,10 @@ Example `config.json`:
 }
 ```
 
+## Required Permissions
+
+The account needs permissions (Okapi) or capabilities (Eureka) for the Data Import `change-manager` and `metadata-provider` APIs and for reading job profiles. See [Required Permissions and Capabilities](permissions.md#folio-data-import-marc-marc-data-import) for the full list.
+
 ## Command-Line Parameters
 
 ### Connection Parameters
