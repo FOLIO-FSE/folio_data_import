@@ -6,14 +6,14 @@ Every FOLIO API call made by this tool is authorized against the user account yo
 - **Eureka systems** use *capabilities*, listed below by capability name (e.g. `users_item.create`). Add them to a role assigned to the user.
 
 ```{note}
-The permission names were taken from the module descriptors of the FOLIO modules that serve each endpoint (`mod-users`, `mod-permissions`, `mod-inventory-storage`, `mod-circulation-storage`, `mod-custom-fields`, `mod-source-record-manager`, `mod-data-import-converter-storage`, `mod-users-bl`). Capability names are derived from permission names by the same rules FOLIO uses to generate capabilities (`folio-permission-utils`): dots become underscores and the final segment becomes the action (`get` → `view`, `post` → `create`, `put` → `edit`, `delete` → `delete`; a bare `post` with no `item`/`collection` segment is a procedural `execute`). Module versions differ, so if a capability is not found in your tenant, search your role editor for the resource name (e.g. "Users Item").
+The permission names were taken from the module descriptors of the FOLIO modules that serve each endpoint (`mod-users`, `mod-permissions`, `mod-inventory-storage`, `mod-circulation-storage`, `mod-custom-fields`, `mod-source-record-manager`, `mod-data-import-converter-storage`, `mod-users-bl`). Capability names are derived from permission names by the same rules FOLIO uses to generate capabilities (`folio-permission-utils`): dots become underscores, the name is lowercased, and the final segment becomes the action (`get` → `view`, `post` → `create`, `put` → `edit`, `delete` → `delete`). A `post` permission that does not end in `.item.post` or `.collection.post` (e.g. the batch and change-manager permissions) is procedural, and its action is `execute`. Module versions differ, so if a capability is not found in your tenant, search your role editor for the resource name (e.g. "Users Item").
 ```
 
 Each table lists the endpoint, the permission name and its display name in the Okapi permission-set editor, and the capability name and the resource and action as shown in the Eureka role editor. The rows marked *conditional* are only needed when the corresponding option or data is in use.
 
 ## All subcommands: login
 
-Logging in (`/authn/login-with-expiry`) requires no permissions. The `marc` command also looks up the current user's ID (to create the job execution); this tries `/bl-users/by-username/{username}` first (permission `users-bl.users-by-username.item.get`, UI name "users-bl item get by username", capability `users-bl_users-by-username_item.view`, Eureka UI "Users-Bl Users-By-Username Item — View") and falls back to `/users` (`users.collection.get`, "users collection get" / `users_collection.view`, "Users Collection — View").
+Logging in (`/authn/login-with-expiry`) requires no permissions. The `marc` command also looks up the current user's ID (to create the job execution); this tries `/bl-users/by-username/{username}` first (permission `users-bl.users-by-username.item.get`, UI name "users-bl item get by username", capability `users-bl_users-by-username_item.view`, Eureka UI "Users-Bl Users-By-Username Item — View") and falls back to `/users` (`users.collection.get`, "users collection get" / `users_collection.view`, "Users Collection — View"). In ECS environments, this lookup is made in the tenant you log in to, not the member tenant, so the permission is needed there.
 
 ## `folio-data-import marc` (MARC Data Import)
 
@@ -27,6 +27,12 @@ Logging in (`/authn/login-with-expiry`) requires no permissions. The `marc` comm
 | Upload records | `POST /change-manager/jobExecutions/{id}/records` | `change-manager.records.post` | Change Manager - post chunk of raw records | `change-manager_records.execute` | Change-Manager Records — Execute |
 | Poll job status | `GET /metadata-provider/jobExecutions` | `metadata-provider.jobExecutions.collection.get` | Metadata Provider - get jobExecutions | `metadata-provider_jobexecutions_collection.view` | Metadata-Provider JobExecutions Collection — View |
 | Job summary | `GET /metadata-provider/jobSummary/{id}` | `metadata-provider.jobSummary.item.get` | Metadata Provider - get summary result | `metadata-provider_jobsummary_item.view` | Metadata-Provider JobSummary Item — View |
+
+Conditional:
+
+| When | Endpoint | Permission (Okapi) | Okapi UI display name | Capability (Eureka) | Eureka UI resource — action |
+|---|---|---|---|---|---|
+| Cancelling a job after an upload error | `DELETE /change-manager/jobExecutions/{id}/records` | `change-manager.records.delete` | Change Manager - delete jobExecution and all associated records from SRS | `change-manager_records.delete` | Change-Manager Records — Delete |
 
 The records the job profile creates or updates (instances, holdings, items, authorities, etc.) are written by FOLIO's own modules, not by this account.
 
@@ -44,7 +50,8 @@ The records the job profile creates or updates (instances, holdings, items, auth
 | Custom fields | `GET /custom-fields` | `custom.fields.collection.get` | Custom Fields - get collection | `custom_fields_collection.view` | Custom Fields Collection — View |
 | Request preference lookup | `GET /request-preference-storage/request-preference` | `circulation-storage.request-preferences.collection.get` | Circulation storage - get request preference collection | `circulation-storage_request-preferences_collection.view` | Circulation-Storage Request-Preferences Collection — View |
 | Create request preference | `POST /request-preference-storage/request-preference` | `circulation-storage.request-preferences.item.post` | Circulation storage - post individual request preference | `circulation-storage_request-preferences_item.create` | Circulation-Storage Request-Preferences Item — Create |
-| Update request preference (*conditional*: preferences changed on existing users) | `PUT /request-preference-storage/request-preference/{id}` | `circulation-storage.request-preferences.item.put` | Circulation storage - put individual request preference | `circulation-storage_request-preferences_item.edit` | Circulation-Storage Request-Preferences Item — Edit |
+| Service-points user lookup (made for every existing user) | `GET /service-points-users` | `inventory-storage.service-points-users.collection.get` | inventory storage - get service-point-users collection | `inventory-storage_service-points-users_collection.view` | Inventory-Storage Service-Points-Users Collection — View |
+| Update request preference (existing users who already have one, even if the file has no `requestPreference`) | `PUT /request-preference-storage/request-preference/{id}` | `circulation-storage.request-preferences.item.put` | Circulation storage - put individual request preference | `circulation-storage_request-preferences_item.edit` | Circulation-Storage Request-Preferences Item — Edit |
 
 Conditional on options and data:
 
@@ -52,13 +59,16 @@ Conditional on options and data:
 |---|---|---|---|---|---|
 | Permissions user objects are handled (default; disabled by `--ignore-permissions-user-objects`) | `GET /perms/users` | `perms.users.get` | permission users read | `perms_users.view` | Perms Users — View |
 |  | `POST /perms/users` | `perms.users.item.post` | permission users item create | `perms_users_item.create` | Perms Users Item — Create |
-| Service points are assigned to users | `GET /service-points-users` | `inventory-storage.service-points-users.collection.get` | inventory storage - get service-point-users collection | `inventory-storage_service-points-users_collection.view` | Inventory-Storage Service-Points-Users Collection — View |
-|  | `POST /service-points-users` | `inventory-storage.service-points-users.item.post` | inventory storage - create individual service-points-user | `inventory-storage_service-points-users_item.create` | Inventory-Storage Service-Points-Users Item — Create |
+| Service points are assigned to users | `POST /service-points-users` | `inventory-storage.service-points-users.item.post` | inventory storage - create individual service-points-user | `inventory-storage_service-points-users_item.create` | Inventory-Storage Service-Points-Users Item — Create |
 |  | `PUT /service-points-users/{id}` | `inventory-storage.service-points-users.item.put` | inventory storage - modify service-points-user | `inventory-storage_service-points-users_item.edit` | Inventory-Storage Service-Points-Users Item — Edit |
 | Deleting users (`--delete-all`) | `DELETE /users/{id}` | `users.item.delete` | users item delete | `users_item.delete` | Users Item — Delete |
 |  | `DELETE /request-preference-storage/request-preference/{id}` | `circulation-storage.request-preferences.item.delete` | Circulation storage - delete request preference | `circulation-storage_request-preferences_item.delete` | Circulation-Storage Request-Preferences Item — Delete |
-|  | `DELETE /perms/users/{id}` (permissions user objects handled) | `perms.users.item.id.delete` | permission user delete | `perms_users_item_id.delete` | Perms Users Item Id — Delete |
+|  | `DELETE /perms/users/{id}` (permissions user objects handled and `delete_pus: true` in the config file) | `perms.users.item.id.delete` | permission user delete | `perms_users_item_id.delete` | Perms Users Item Id — Delete |
 |  | `DELETE /service-points-users/{id}` | `inventory-storage.service-points-users.item.delete` | inventory storage - delete individual service-points-user | `inventory-storage_service-points-users_item.delete` | Inventory-Storage Service-Points-Users Item — Delete |
+
+```{warning}
+A missing *read* permission for an existing-record lookup (users, request preferences, permissions users, service-points users) does not stop the import. The failed lookup is treated as "no existing record", so the tool tries to create a record instead of updating it. Those errors look like duplicate-record failures, not permission errors.
+```
 
 ## `folio-data-import batch-poster` (Batch Poster)
 
