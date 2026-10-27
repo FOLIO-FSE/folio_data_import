@@ -36,6 +36,8 @@ uv add 'folio_data_import[postgres]'
 2. **PostgreSQL database access** - Direct connection to the FOLIO database
 3. **SSH access** (optional) - If the database is only accessible via a bastion/jump host
 
+**Permissions:** no FOLIO API permissions beyond login are needed; the database user needs `SELECT` on the source-record-manager journal and incoming-record tables. See [Required Permissions and Capabilities](permissions.md#folio-data-import-get-di-logs-data-import-log-retriever).
+
 ### Job Execution IDs
 
 You need the Job Execution IDs from the Data Import jobs you want to analyze. These can be found:

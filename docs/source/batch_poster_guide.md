@@ -92,6 +92,10 @@ These options only apply when `--upsert` is enabled:
 | `--patch-existing-records` | false | Enable selective field patching |
 | `--patch-paths` | none | Comma-separated list of fields to patch |
 
+## Required Permissions
+
+Posting needs the `inventory-storage` batch permission (Okapi) or capability (Eureka) for the record type; `--upsert` and patching additionally need read access. See [Required Permissions and Capabilities](permissions.md#folio-data-import-batch-poster-batch-poster) for the full list.
+
 ## Configuration File
 
 For complex configurations, use a JSON configuration file:
