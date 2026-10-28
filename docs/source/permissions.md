@@ -6,7 +6,7 @@ Every FOLIO API call made by this tool is authorized against the user account yo
 - **Eureka systems** use *capabilities*, listed below by capability name (e.g. `users_item.create`). Add them to a role assigned to the user.
 
 ```{note}
-The permission names were taken from the module descriptors of the FOLIO modules that serve each endpoint (`mod-users`, `mod-permissions`, `mod-inventory-storage`, `mod-circulation-storage`, `mod-custom-fields`, `mod-source-record-manager`, `mod-data-import-converter-storage`, `mod-users-bl`). Capability names are derived from permission names by the same rules FOLIO uses to generate capabilities (`folio-permission-utils`): dots become underscores, the name is lowercased, and the final segment becomes the action (`get` → `view`, `post` → `create`, `put` → `edit`, `delete` → `delete`). A `post` permission that does not end in `.item.post` or `.collection.post` (e.g. the batch and change-manager permissions) is procedural, and its action is `execute`. Module versions differ, so if a capability is not found in your tenant, search your role editor for the resource name (e.g. "Users Item").
+The permission names were taken from the module descriptors of the FOLIO modules that serve each endpoint (`mod-users`, `mod-permissions`, `mod-inventory-storage`, `mod-circulation-storage`, `mod-source-record-manager`, `mod-data-import-converter-storage`, `mod-users-bl`, and for module versions Okapi itself and `mgr-tenant-entitlements`). Capability names are derived from permission names by the same rules FOLIO uses to generate capabilities (`folio-permission-utils`): dots become underscores, the name is lowercased, and the final segment becomes the action (`get` → `view`, `post` → `create`, `put` → `edit`, `delete` → `delete`). A `post` permission that does not end in `.item.post` or `.collection.post` (e.g. the batch and change-manager permissions) is procedural, and its action is `execute`. Module versions differ, so if a capability is not found in your tenant, search your role editor for the resource name (e.g. "Users Item").
 ```
 
 Each table lists the endpoint, the permission name and its display name in the Okapi permission-set editor, and the capability name and the resource and action as shown in the Eureka role editor. The rows marked *conditional* are only needed when the corresponding option or data is in use.
@@ -14,6 +14,8 @@ Each table lists the endpoint, the permission name and its display name in the O
 ## All subcommands: login
 
 Logging in (`/authn/login-with-expiry`) requires no permissions. The `marc` command also looks up the current user's ID (to create the job execution); this tries `/bl-users/by-username/{username}` first (permission `users-bl.users-by-username.item.get`, UI name "users-bl item get by username", capability `users-bl_users-by-username_item.view`, Eureka UI "Users-Bl Users-By-Username Item — View") and falls back to `/users` (`users.collection.get`, "users collection get" / `users_collection.view`, "Users Collection — View"). In ECS environments, this lookup is made in the tenant you log in to, not the member tenant, so the permission is needed there.
+
+On construction, the client also checks whether the tenant is an ECS central tenant by calling `GET /consortia` and `GET /consortia/{id}/tenants`. The `mod-consortia` module descriptor declares no required permissions for these endpoints, and the client treats any HTTP error as "not ECS", so nothing needs to be granted for this check. Expired tokens are renewed by logging in again, which also needs no permissions.
 
 ## `folio-data-import marc` (MARC Data Import)
 
@@ -47,7 +49,8 @@ The records the job profile creates or updates (instances, holdings, items, auth
 | Address types | `GET /addresstypes` | `addresstypes.collection.get` | addresstypes collection get | `addresstypes_collection.view` | Addresstypes Collection — View |
 | Departments | `GET /departments` | `departments.collection.get` | departments collection get | `departments_collection.view` | Departments Collection — View |
 | Service points (for lookup) | `GET /service-points` | `inventory-storage.service-points.collection.get` | inventory storage - get service-point collection | `inventory-storage_service-points_collection.view` | Inventory-Storage Service-Points Collection — View |
-| Custom fields | `GET /custom-fields` | `custom.fields.collection.get` | Custom Fields - get collection | `custom_fields_collection.view` | Custom Fields Collection — View |
+| Module versions (used to find the `mod-users` module id) | Okapi: `GET /_/proxy/tenants/{tenant}/modules`; Eureka: `GET /entitlements/{tenant}/applications` | Okapi: `okapi.proxy.tenants.modules.list`; Eureka: none required | Okapi - List modules enabled for tenant | Eureka: none required | n/a |
+| Custom fields (served by `mod-users`; sent with an `X-Okapi-Module-Id` header) | `GET /custom-fields` | `user-settings.custom-fields.collection.get` | User Custom Fields - get collection | `user-settings_custom-fields_collection.view` | User-Settings Custom-Fields Collection — View |
 | Request preference lookup | `GET /request-preference-storage/request-preference` | `circulation-storage.request-preferences.collection.get` | Circulation storage - get request preference collection | `circulation-storage_request-preferences_collection.view` | Circulation-Storage Request-Preferences Collection — View |
 | Create request preference | `POST /request-preference-storage/request-preference` | `circulation-storage.request-preferences.item.post` | Circulation storage - post individual request preference | `circulation-storage_request-preferences_item.create` | Circulation-Storage Request-Preferences Item — Create |
 | Service-points user lookup (made for every existing user) | `GET /service-points-users` | `inventory-storage.service-points-users.collection.get` | inventory storage - get service-point-users collection | `inventory-storage_service-points-users_collection.view` | Inventory-Storage Service-Points-Users Collection — View |
@@ -65,6 +68,10 @@ Conditional on options and data:
 |  | `DELETE /request-preference-storage/request-preference/{id}` | `circulation-storage.request-preferences.item.delete` | Circulation storage - delete request preference | `circulation-storage_request-preferences_item.delete` | Circulation-Storage Request-Preferences Item — Delete |
 |  | `DELETE /perms/users/{id}` (permissions user objects handled and `delete_pus: true` in the config file) | `perms.users.item.id.delete` | permission user delete | `perms_users_item_id.delete` | Perms Users Item Id — Delete |
 |  | `DELETE /service-points-users/{id}` | `inventory-storage.service-points-users.item.delete` | inventory storage - delete individual service-points-user | `inventory-storage_service-points-users_item.delete` | Inventory-Storage Service-Points-Users Item — Delete |
+
+```{note}
+The module-version and custom-field lookups are only used to resolve select-type custom field labels to option ids. If either fails (for example a missing permission), the import logs a warning and continues, and custom field values must then be supplied as option ids.
+```
 
 ```{warning}
 A missing *read* permission for an existing-record lookup (users, request preferences, permissions users, service-points users) does not stop the import. The failed lookup is treated as "no existing record", so the tool tries to create a record instead of updating it. Those errors look like duplicate-record failures, not permission errors.
