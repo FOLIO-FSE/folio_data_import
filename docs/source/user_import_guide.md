@@ -52,6 +52,10 @@ Example `config.json`:
 }
 ```
 
+## Required Permissions
+
+The account needs permissions (Okapi) or capabilities (Eureka) for users, reference data lookups, request preferences, and, depending on options, permissions users and service-point users. See [Required Permissions and Capabilities](permissions.md#folio-data-import-users-user-import) for the full list, including what `--ignore-permissions-user-objects` and user deletion add or remove.
+
 ## Command-Line Parameters
 
 ### Connection Parameters
