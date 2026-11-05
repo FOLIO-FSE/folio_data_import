@@ -197,9 +197,12 @@ class UserImporter:  # noqa: R0902
         self.delete_pus = config.delete_pus
         self.limit_simultaneous_requests = asyncio.Semaphore(config.limit_simultaneous_requests)
         # Build reference data maps (these need processing)
-        self.patron_group_map: dict = self.build_ref_data_id_map(
-            self.folio_client, "/groups", "usergroups", "group"
-        )
+        self.patron_group_map: dict = {
+            k.lower(): v
+            for k, v in self.build_ref_data_id_map(
+                self.folio_client, "/groups", "usergroups", "group"
+            ).items()
+        }
         self.address_type_map: dict = self.build_ref_data_id_map(
             self.folio_client, "/addresstypes", "addressTypes", "addressType"
         )
@@ -746,7 +749,9 @@ class UserImporter:  # noqa: R0902
                     f"skipping mapping\n"
                 )
             else:
-                user_obj["patronGroup"] = self.patron_group_map[user_obj["patronGroup"]]
+                user_obj["patronGroup"] = self.patron_group_map[
+                    str(user_obj["patronGroup"]).strip().lower()
+                ]
         except KeyError:
             if user_obj["patronGroup"] not in self.patron_group_map.values():
                 self._log_data_issue(
