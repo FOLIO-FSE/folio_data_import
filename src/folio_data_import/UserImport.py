@@ -173,6 +173,16 @@ class UserImporter:  # noqa: R0902
                 description="Whether to handle permission user objects when updating users.",
             ),
         ] = True
+        case_sensitive_patron_groups: Annotated[
+            bool,
+            Field(
+                title="Case-sensitive patron groups",
+                description=(
+                    "Whether patron group names must match FOLIO exactly. "
+                    "By default, names are matched case-insensitively."
+                ),
+            ),
+        ] = False
 
     logfile: AsyncTextIOWrapper
     errorfile: AsyncTextIOWrapper
@@ -197,8 +207,9 @@ class UserImporter:  # noqa: R0902
         self.delete_pus = config.delete_pus
         self.limit_simultaneous_requests = asyncio.Semaphore(config.limit_simultaneous_requests)
         # Build reference data maps (these need processing)
+        self.case_sensitive_patron_groups = config.case_sensitive_patron_groups
         self.patron_group_map: dict = {
-            k.lower(): v
+            self._normalize_patron_group(k): v
             for k, v in self.build_ref_data_id_map(
                 self.folio_client, "/groups", "usergroups", "group"
             ).items()
@@ -728,6 +739,11 @@ class UserImporter:  # noqa: R0902
             if mapped_addresses:
                 user_obj["personal"]["addresses"] = mapped_addresses
 
+    def _normalize_patron_group(self, name: str) -> str:
+        """Strip a patron group name, and lowercase it unless matching is case-sensitive."""
+        name = str(name).strip()
+        return name if self.case_sensitive_patron_groups else name.lower()
+
     def map_patron_groups(self, user_obj, line_number: int) -> None:
         """
         Maps the patron group of a user object using the provided patron group map.
@@ -750,7 +766,7 @@ class UserImporter:  # noqa: R0902
                 )
             else:
                 user_obj["patronGroup"] = self.patron_group_map[
-                    str(user_obj["patronGroup"]).strip().lower()
+                    self._normalize_patron_group(user_obj["patronGroup"])
                 ]
         except KeyError:
             if user_obj["patronGroup"] not in self.patron_group_map.values():
@@ -1802,6 +1818,14 @@ def main(
             ),
         ),
     ] = False,
+    case_sensitive_patron_groups: Annotated[
+        bool,
+        cyclopts.Parameter(
+            name=["--case-sensitive-patron-groups"],
+            group="Job Configuration Parameters",
+            help="Require patron group names to match FOLIO exactly (default: case-insensitive)",
+        ),
+    ] = False,
 ) -> None:
     """
     Command-line interface to batch import users into FOLIO
@@ -1829,6 +1853,7 @@ def main(
         debug (bool): Enable debug logging.
         ignore_permissions_user_objects (bool): Skip creating or updating objects at the
             permissions-user endpoints.
+        case_sensitive_patron_groups (bool): Require patron group names to match exactly.
     """  # noqa: E501
     set_up_cli_logging(logger, "folio_user_import", debug, True, stream_level=logging.WARNING)
     fields_to_protect = fields_to_protect or ""
@@ -1879,6 +1904,7 @@ def main(
             no_progress=no_progress,
             delete_all=delete_all,
             handle_permissions_user_objects=not ignore_permissions_user_objects,
+            case_sensitive_patron_groups=case_sensitive_patron_groups,
         )
     if config.delete_all:
         logger.warning(
