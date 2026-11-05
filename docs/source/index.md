@@ -16,6 +16,7 @@ user_import_guide.md
 marc_data_import_guide.md
 marc_preprocessors.md
 di_log_retriever_guide.md
+permissions.md
 examples.md
 troubleshooting.md
 ```
@@ -63,6 +64,7 @@ FOLIO Data Import provides utilities and tools to help with initial data migrati
 - **[Installation Guide](installing.md)** - Get started with pip or development setup
 - **[Quick Start Tutorial](quick_start.md)** - Simple examples to get you running
 - **[API Reference](api_reference.rst)** - Complete Python API documentation
+- **[Required Permissions](permissions.md)** - Permissions (Okapi) and capabilities (Eureka) for each subcommand
 - **[Troubleshooting](troubleshooting.md)** - Common issues and solutions
 
 ## Contributing
