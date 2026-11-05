@@ -78,6 +78,7 @@ Example `config.json`:
 | `--delete-all` | `FOLIO_DELETE_ALL_USERS` | `false` | Delete users in file(s) instead of creating/updating |
 | `--limit-async-requests` | `FOLIO_LIMIT_ASYNC_REQUESTS` | 10 | Max concurrent HTTP requests (1-100) |
 | `--ignore-permissions-user-objects` | - | `false` | Do not look up or create objects at the `/perms/users` endpoints (see below) |
+| `--case-sensitive-patron-groups` | - | `false` | Require `patronGroup` names to match FOLIO exactly (default is case-insensitive) |
 | `--report-file-base-path` | - | Current directory | Base path for report files |
 | `--config-file` | - | (none) | Path to JSON config file (overrides CLI parameters) |
 | `--yes` / `-y` | - | `false` | Skip confirmation prompt for destructive operations (e.g. `--delete-all`) |
@@ -157,7 +158,7 @@ Common fields include:
 - `addresses`: Array of address objects
 
 **Group and Department:**
-- `patronGroup`: Patron group name (case-insensitive) or UUID (required)
+- `patronGroup`: Patron group name (case-insensitive by default) or UUID (required)
 - `departments`: Array of department names or UUIDs
 
 **Service Points:**
@@ -181,7 +182,7 @@ You can use either the human-friendly name or the UUID directly:
 {"patronGroup": "54e17c4c-e315-4c99-9bb6-6c2f31e3a9e5", ...}
 ```
 
-Patron group names are matched case-insensitively, so `Undergraduate`, `undergraduate` and `UNDERGRADUATE` all resolve to the same group. Other reference data names are matched exactly.
+Patron group names are matched case-insensitively, so `Undergraduate`, `undergraduate` and `UNDERGRADUATE` all resolve to the same group. Other reference data names are matched exactly. To require exact matches for patron groups too, pass `--case-sensitive-patron-groups` (or set `"case_sensitive_patron_groups": true` in a config file; the CLI flag is not applied when `--config-file` is used).
 
 ## Custom Fields
 

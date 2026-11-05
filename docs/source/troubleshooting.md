@@ -261,7 +261,7 @@ export FOLIO_LIBRARY_NAME="Main Library"
 **Solution:**
 
 1. Check **Settings > Users > Patron Groups** for exact names
-2. Use the patron group name (matched case-insensitively, ignoring leading/trailing whitespace) or its UUID in your data
+2. Use the patron group name (surrounding whitespace is ignored, and matching is case-insensitive unless `--case-sensitive-patron-groups` is set) or its UUID in your data
 3. Create missing patron groups before import
 
 ### Error: "Service point not found"
