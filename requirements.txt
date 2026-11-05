@@ -1,6 +1,6 @@
 aiofiles==24.1.0 ; python_version >= "3.9" and python_version < "4.0"
 ansicon==1.89.0 ; python_version >= "3.9" and python_version < "4.0" and platform_system == "Windows"
-anyio==4.4.0 ; python_version >= "3.9" and python_version < "4.0"
+anyio==4.14.2 ; python_version >= "3.9" and python_version < "4.0"
 attrs==24.2.0 ; python_version >= "3.9" and python_version < "4.0"
 bandit==1.7.9 ; python_version >= "3.9" and python_version < "4.0"
 black==24.8.0 ; python_version >= "3.9" and python_version < "4.0"
