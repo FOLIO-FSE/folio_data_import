@@ -157,7 +157,7 @@ Common fields include:
 - `addresses`: Array of address objects
 
 **Group and Department:**
-- `patronGroup`: Patron group name or UUID (required)
+- `patronGroup`: Patron group name (case-insensitive) or UUID (required)
 - `departments`: Array of department names or UUIDs
 
 **Service Points:**
@@ -180,6 +180,8 @@ You can use either the human-friendly name or the UUID directly:
 {"patronGroup": "undergraduate", ...}
 {"patronGroup": "54e17c4c-e315-4c99-9bb6-6c2f31e3a9e5", ...}
 ```
+
+Patron group names are matched case-insensitively, so `Undergraduate`, `undergraduate` and `UNDERGRADUATE` all resolve to the same group. Other reference data names are matched exactly.
 
 ## Custom Fields
 
