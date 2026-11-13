@@ -352,7 +352,7 @@ The `servicePointsUser` object:
 - `servicePointsIds`: Array of service point codes or UUIDs
 - `defaultServicePointId`: Default service point code or UUID
 
-The importer handles service point assignments separately via the `/service-points-users` API.
+The importer handles service point assignments separately via the `/service-points-users` API. These settings apply to FOLIO operators (staff users) and control which service points they can work at and their default service point.
 
 ## Addresses
 
@@ -363,6 +363,34 @@ Include multiple addresses per user:
 ```
 
 Address type names (like "Home", "Work") are resolved to UUIDs automatically.
+
+## Request Preferences
+
+The `requestPreference` object holds a patron's request fulfillment preferences. It is imported separately from the rest of the user object, and its reference data mapping is described below.
+
+```json
+{"username": "jdoe", "externalSystemId": "12345", "active": true, "patronGroup": "staff", "personal": {"lastName": "Doe", "firstName": "John"}, "requestPreference": {"holdShelf": true, "delivery": true, "defaultServicePointId": "MAIN-CIRC", "defaultDeliveryAddressTypeId": "Home"}}
+```
+
+The `requestPreference` object:
+- `holdShelf`: Whether the patron accepts hold shelf fulfillment
+- `delivery`: Whether the patron accepts delivery fulfillment
+- `defaultServicePointId`: Default pickup service point code or UUID
+- `defaultDeliveryAddressTypeId`: Default delivery address type name (like "Home") or UUID
+
+If the user has no request preference in FOLIO, one is created from the incoming `requestPreference` values. If no request preference exists in FOLIO nor in the incoming record, a default one is created with `holdShelf` set to `true` and `delivery` set to `false`.
+
+### Default Pickup Location
+
+`requestPreference.defaultServicePointId` is the service point where the patron collects requested items. Service point codes are resolved to UUIDs automatically; UUIDs are used as-is.
+
+If the code cannot be mapped, the field is removed and a data issue is logged (field `requestPreference.defaultServicePointId`). The rest of the request preference is still saved.
+
+### Default Delivery Address Type
+
+`requestPreference.defaultDeliveryAddressTypeId` is the type of the patron's address that is used for delivery. Address type names are resolved to UUIDs automatically; UUIDs are used as-is.
+
+If the name cannot be mapped, the field is removed and a data issue is logged (field `requestPreference.defaultDeliveryAddressTypeId`). If `delivery` is `true`, it is set to `false` and the data issue notes this. The rest of the request preference is still saved.
 
 ## Multiple Input Files
 
