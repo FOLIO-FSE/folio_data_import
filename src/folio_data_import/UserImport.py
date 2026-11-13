@@ -1214,14 +1214,16 @@ class UserImporter:  # noqa: R0902
         if existing_rp:
             await self.update_existing_rp(rp_obj, existing_rp)
         else:
-            await self.create_new_rp(new_user_obj)
+            await self.create_new_rp(new_user_obj, rp_obj)
 
-    async def create_new_rp(self, new_user_obj):
+    async def create_new_rp(self, new_user_obj, rp_obj=None):
         """
         Creates a new request preference for a user.
 
         Args:
             new_user_obj (dict): The user object containing the user's ID.
+            rp_obj (dict, optional): Incoming request preference values, which override
+                the defaults {holdShelf=True, delivery=False}.
 
         Raises:
             HTTPError: If there is an error in the HTTP request.
@@ -1229,7 +1231,7 @@ class UserImporter:  # noqa: R0902
         Returns:
             None
         """
-        rp_obj = {"holdShelf": True, "delivery": False}
+        rp_obj = {"holdShelf": True, "delivery": False, **(rp_obj or {})}
         rp_obj["userId"] = new_user_obj["id"]
         response = await self.http_client.post(
             "/request-preference-storage/request-preference",
@@ -1399,6 +1401,7 @@ class UserImporter:  # noqa: R0902
             self.map_patron_groups(user_obj, line_number)
             self.map_departments(user_obj, line_number)
             self.map_custom_fields(user_obj, line_number)
+            self.map_request_preference(rp_obj, existing_user, line_number)
             new_user_obj = await self.create_or_update_user(
                 user_obj, existing_user, protected_fields, line_number
             )
@@ -1432,6 +1435,86 @@ class UserImporter:  # noqa: R0902
                 await self.handle_service_points_user(
                     spu_obj, existing_spu, new_user_obj, line_number
                 )
+
+    def _map_rp_default_delivery_address_type(
+        self, rp_obj, existing_user, line_number: int
+    ) -> None:
+        """
+        Maps requestPreference.defaultDeliveryAddressTypeId from an address type name
+        to its UUID. UUIDs already in the address type map pass through; unmappable
+        values are removed and logged as a data issue.
+        """
+        if "defaultDeliveryAddressTypeId" not in rp_obj:
+            return
+        value = rp_obj.pop("defaultDeliveryAddressTypeId", "")
+        try:
+            if self.validate_uuid(value) and value in self.address_type_map.values():
+                logger.debug(
+                    f"Row {line_number}: Default delivery address type {value} "
+                    "is a UUID, skipping mapping\n"
+                )
+                rp_obj["defaultDeliveryAddressTypeId"] = value
+            else:
+                rp_obj["defaultDeliveryAddressTypeId"] = self.address_type_map[value]
+        except (KeyError, TypeError):
+            message = f'Default delivery address type removed: "{value}" could not be mapped.'
+            context = {
+                "field": "requestPreference.defaultDeliveryAddressTypeId",
+                "value": value,
+            }
+            if rp_obj.get("delivery") is True:
+                rp_obj["delivery"] = False
+                message += " Delivery was set to false."
+                context["deliverySetToFalse"] = True
+            self._log_data_issue(existing_user, line_number, message, context)
+            logger.error(
+                f'Row {line_number}: Default delivery address type "{value}" not found, '
+                "removing it from request preference"
+                f"{' and setting delivery to false' if context.get('deliverySetToFalse') else ''}"
+                "\n"
+            )
+
+    def map_request_preference(self, rp_obj, existing_user, line_number: int):
+        """
+        Maps the default pickup service point (from a service point code) and the
+        default delivery address type (from an address type name) of a request
+        preference object to their UUIDs. Unlike servicePointsUser, the pickup
+        service point is independent of the user's assigned service points.
+
+        Args:
+            rp_obj (dict): The request preference object to update.
+            existing_user (dict): The existing user object associated with the rp_obj.
+            line_number (int): The line number of the record being processed.
+
+        Returns:
+            None
+        """
+        self._map_rp_default_delivery_address_type(rp_obj, existing_user, line_number)
+        if "defaultServicePointId" not in rp_obj:
+            return
+        sp_code = rp_obj.pop("defaultServicePointId", "")
+        try:
+            if self.validate_uuid(sp_code) and sp_code in self.service_point_map.values():
+                logger.debug(
+                    f"Default pickup service point {sp_code} is a UUID, skipping mapping\n"
+                )
+                rp_obj["defaultServicePointId"] = sp_code
+            else:
+                rp_obj["defaultServicePointId"] = self.service_point_map[sp_code]
+        except (KeyError, TypeError):
+            self._log_data_issue(
+                existing_user,
+                line_number,
+                f'Default pickup service point removed: "{sp_code}" could not be mapped.',
+                {
+                    "field": "requestPreference.defaultServicePointId",
+                    "value": sp_code,
+                },
+            )
+            logger.error(
+                f'Default pickup service point "{sp_code}" not found, excluding it from '
+                f"request preference for user: {existing_user.get('id', '')}"
+            )
 
     def map_service_points(self, spu_obj, existing_user, line_number: int):
         """

@@ -493,3 +493,106 @@ def test_cli_config_file_delete_all_requires_confirmation(tmp_path, monkeypatch)
     captured, code = _run_cli_with_config_file({"delete_all": True}, [], tmp_path, monkeypatch)
     assert code == 1
     assert "config" not in captured
+
+
+SP_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def test_map_request_preference_code(folio_client):
+    importer = make_importer(folio_client)
+    importer.service_point_map = {"MAIN": SP_ID}
+    rp = {"holdShelf": True, "defaultServicePointId": "MAIN"}
+    importer.map_request_preference(rp, {"id": "u1"}, 1)
+    assert rp == {"holdShelf": True, "defaultServicePointId": SP_ID}
+
+
+def test_map_request_preference_uuid_passthrough(folio_client):
+    importer = make_importer(folio_client)
+    importer.service_point_map = {"MAIN": SP_ID}
+    rp = {"defaultServicePointId": SP_ID}
+    importer.map_request_preference(rp, {"id": "u1"}, 1)
+    assert rp == {"defaultServicePointId": SP_ID}
+
+
+def test_map_request_preference_unmappable_removed_and_logged(folio_client):
+    importer = make_importer(folio_client)
+    importer.service_point_map = {"MAIN": SP_ID}
+    importer._log_data_issue = Mock()
+    rp = {"holdShelf": True, "defaultServicePointId": "NOPE"}
+    importer.map_request_preference(rp, {"id": "u1"}, 3)
+    assert rp == {"holdShelf": True}
+    importer._log_data_issue.assert_called_once()
+    assert importer._log_data_issue.call_args[0][3]["field"] == (
+        "requestPreference.defaultServicePointId"
+    )
+
+
+def test_map_request_preference_absent_is_noop(folio_client):
+    importer = make_importer(folio_client)
+    rp = {"holdShelf": True}
+    importer.map_request_preference(rp, {"id": "u1"}, 1)
+    assert rp == {"holdShelf": True}
+
+
+def test_create_new_rp_respects_incoming(folio_client):
+    importer = make_importer(folio_client)
+    importer.http_client = AsyncMock()
+    importer.http_client.post.return_value = Mock()
+    asyncio.run(
+        importer.create_new_rp(
+            {"id": "u1"}, {"holdShelf": False, "delivery": True, "defaultServicePointId": SP_ID}
+        )
+    )
+    sent = importer.http_client.post.call_args.kwargs["json"]
+    assert sent == {
+        "holdShelf": False,
+        "delivery": True,
+        "defaultServicePointId": SP_ID,
+        "userId": "u1",
+    }
+
+
+ADDR_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def test_map_request_preference_delivery_address_type(folio_client):
+    importer = make_importer(folio_client)
+    importer.address_type_map = {"Home": ADDR_ID}
+    rp = {"delivery": True, "defaultDeliveryAddressTypeId": "Home"}
+    importer.map_request_preference(rp, {"id": "u1"}, 1)
+    assert rp == {"delivery": True, "defaultDeliveryAddressTypeId": ADDR_ID}
+
+
+def test_map_request_preference_delivery_address_type_uuid(folio_client):
+    importer = make_importer(folio_client)
+    importer.address_type_map = {"Home": ADDR_ID}
+    rp = {"defaultDeliveryAddressTypeId": ADDR_ID}
+    importer.map_request_preference(rp, {"id": "u1"}, 1)
+    assert rp == {"defaultDeliveryAddressTypeId": ADDR_ID}
+
+
+def test_map_request_preference_delivery_address_type_unmappable(folio_client):
+    importer = make_importer(folio_client)
+    importer.address_type_map = {"Home": ADDR_ID}
+    importer._log_data_issue = Mock()
+    rp = {"delivery": True, "defaultDeliveryAddressTypeId": "Nope"}
+    importer.map_request_preference(rp, {"id": "u1"}, 2)
+    assert rp == {"delivery": False}
+    args = importer._log_data_issue.call_args[0]
+    assert args[3]["field"] == "requestPreference.defaultDeliveryAddressTypeId"
+    assert args[3]["deliverySetToFalse"] is True
+    assert "Delivery was set to false" in args[2]
+
+
+def test_map_request_preference_delivery_address_type_unmappable_delivery_false(
+    folio_client,
+):
+    importer = make_importer(folio_client)
+    importer.address_type_map = {"Home": ADDR_ID}
+    importer._log_data_issue = Mock()
+    rp = {"delivery": False, "defaultDeliveryAddressTypeId": "Nope"}
+    importer.map_request_preference(rp, {"id": "u1"}, 2)
+    assert rp == {"delivery": False}
+    args = importer._log_data_issue.call_args[0]
+    assert "deliverySetToFalse" not in args[3]
+    assert "Delivery was set" not in args[2]
