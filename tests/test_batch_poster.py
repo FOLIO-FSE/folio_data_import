@@ -235,6 +235,34 @@ class TestBatchPoster:
         assert new_record["barcode"] == "NEW-BARCODE"
         assert new_record["_version"] == 2
 
+    def test_patch_record_removes_missing_patch_paths(self, batch_poster):
+        """Paths in remove_paths absent from the incoming record are removed."""
+        new_record = {"id": "123", "barcode": "NEW"}
+        existing_record = {
+            "id": "123",
+            "barcode": "OLD",
+            "copyNumber": "c.2",
+            "notes": ["x"],
+            "_version": 2,
+        }
+
+        batch_poster.patch_record(
+            new_record, existing_record, ["barcode", "copyNumber"], ["barcode", "copyNumber"]
+        )
+
+        assert new_record["barcode"] == "NEW"
+        assert "copyNumber" not in new_record
+        assert new_record["notes"] == ["x"]
+
+    def test_patch_record_keeps_missing_paths_without_remove(self, batch_poster):
+        """Without remove_paths, absent patch paths keep the existing value."""
+        new_record = {"id": "123", "barcode": "NEW"}
+        existing_record = {"id": "123", "barcode": "OLD", "copyNumber": "c.2"}
+
+        batch_poster.patch_record(new_record, existing_record, ["barcode", "copyNumber"])
+
+        assert new_record["copyNumber"] == "c.2"
+
     def test_prepare_record_for_upsert(self, batch_poster):
         """Test preparing a record for upsert."""
         new_record = {"id": "123", "barcode": "12345"}
