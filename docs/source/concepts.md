@@ -198,6 +198,8 @@ For fine-grained updates, use `--patch-existing-records` with `--patch-paths`:
 
 This updates only the specified fields while preserving all others from the existing record.
 
+Add `--remove-missing-patch-paths` to remove any listed field that is absent from the incoming record, rather than keeping its existing value.
+
 ### Consortium Shadow Instances
 
 For FOLIO ECS (consortium) environments, use `--object-type ShadowInstances` to post shadow copies to member tenants. This automatically converts the `source` field to consortium format:

@@ -91,6 +91,7 @@ These options only apply when `--upsert` is enabled:
 | `--overwrite-item-status` | false | Allow item status changes (status preserved by default) |
 | `--patch-existing-records` | false | Enable selective field patching |
 | `--patch-paths` | none | Comma-separated list of fields to patch |
+| `--remove-missing-patch-paths` | false | Remove fields in `--patch-paths` that are absent from the incoming record |
 
 ## Required Permissions
 
@@ -198,6 +199,16 @@ This updates **only** `barcode` and `materialTypeId` from your input file while 
   "materialTypeId": "1a54b431-2e4f-452d-9cae-9cee66c9a892"
 }
 ```
+
+**Removing fields:** By default, a field listed in `--patch-paths` that is missing from the input record keeps its existing value. Add `--remove-missing-patch-paths` to remove such fields from the existing record instead:
+
+```bash
+--upsert --patch-existing-records \
+  --patch-paths "barcode,copyNumber" \
+  --remove-missing-patch-paths
+```
+
+If an input record has `barcode` but no `copyNumber`, the existing `copyNumber` is removed. Fields protected by the `--preserve-*` options, `hrid`, `lastCheckIn` and (unless `--overwrite-item-status` is set) item `status` are never removed. For MARC-sourced instances, only the suppression and deleted fields listed in `--patch-paths` can be removed. Fields are matched by top-level name, and the option has no effect when `--patch-paths` is empty.
 
 ```{note}
 **Conflict with item status preservation:** For Items, existing item status is preserved by default (unless `--overwrite-item-status` is set), and that preservation is applied *after* patch fields are merged. If you include `status` in `--patch-paths`, the patched value will be silently overwritten by the existing record's status. To actually patch item status via `--patch-paths`, you must also pass `--overwrite-item-status`.
