@@ -1125,7 +1125,10 @@ class UserImporter:  # noqa: R0902
 
         """
         user_obj = json.loads(user)
-        user_obj["type"] = user_obj.get("type", "patron")
+        user_type = user_obj.get("type", "patron")
+        if user_type == "object":
+            user_type = "patron"
+        user_obj["type"] = user_type
         return user_obj
 
     def get_protected_fields(self, existing_user) -> dict:
