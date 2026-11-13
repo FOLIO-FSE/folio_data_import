@@ -363,6 +363,7 @@ Run `folio-data-import batch-poster --help` to see all available options:
 - `--preserve-item-status`: Keep item status (Items only, default: true)
 - `--patch-existing-records`: Enable selective field patching
 - `--patch-paths`: Comma-separated list of fields to patch
+- `--remove-missing-patch-paths`: Remove fields in `--patch-paths` that are absent from the incoming record
 - `--failed-records-file`: Path to save failed records
 - `--no-progress`: Disable progress bar (useful for CI/CD)
 

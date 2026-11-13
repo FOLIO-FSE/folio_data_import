@@ -374,6 +374,8 @@ folio-data-import batch-poster \
   --patch-paths "barcode,materialTypeId"
 ```
 
+Add `--remove-missing-patch-paths` to also remove any listed field that is absent from the incoming record (by default such fields keep their existing value).
+
 ### Custom Batch Size
 
 Control the number of records per batch (default is 100):
