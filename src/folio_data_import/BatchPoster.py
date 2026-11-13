@@ -248,6 +248,19 @@ class BatchPoster:
                 ),
             ),
         ] = None
+        remove_missing_patch_paths: Annotated[
+            bool,
+            Field(
+                title="Remove missing patch paths",
+                description=(
+                    "When patching, remove any field listed in patch_paths that is absent "
+                    "from the incoming record, instead of leaving the existing value in "
+                    "place. Fields protected by the preserve_* options, hrid, lastCheckIn "
+                    "and (by default) item status are not removed. Requires "
+                    "patch_existing_records and patch_paths."
+                ),
+            ),
+        ] = False
         rerun_failed_records: Annotated[
             bool,
             Field(
@@ -455,7 +468,11 @@ class BatchPoster:
             updates["status"] = existing_record["status"]
 
     def patch_record(
-        self, new_record: dict, existing_record: dict, patch_paths: List[str]
+        self,
+        new_record: dict,
+        existing_record: dict,
+        patch_paths: List[str],
+        remove_paths: List[str] | None = None,
     ) -> None:
         """
         Update new_record with values from existing_record according to patch_paths.
@@ -464,6 +481,8 @@ class BatchPoster:
             new_record: The new record to be updated
             existing_record: The existing record to patch from
             patch_paths: List of fields in JSON Path notation to patch during upsert
+            remove_paths: Fields to delete from the existing record when they are
+                absent from new_record (preserve_* rules still take precedence)
         """
         # Work on a deep copy so nested merges do not mutate existing_record.
         updates = deepcopy(existing_record)
@@ -489,6 +508,11 @@ class BatchPoster:
 
         # Merge the updates
         deep_update(updates, keep_new)
+
+        # Remove patch paths that are absent from the incoming record
+        for path in remove_paths or []:
+            if path not in new_record:
+                updates.pop(path, None)
 
         # Merge arrays from keep_existing, avoiding duplicates
         for key, value in keep_existing.items():
@@ -553,11 +577,21 @@ class BatchPoster:
                     restricted_paths,
                 )
 
-            self.patch_record(new_record, existing_record, restricted_paths)
+            remove_paths = (
+                [p for p in restricted_paths if p in user_patch_paths]
+                if self.config.remove_missing_patch_paths
+                else None
+            )
+            self.patch_record(new_record, existing_record, restricted_paths, remove_paths)
 
         elif self.config.patch_existing_records:
             # Apply patching with user-specified paths
-            self.patch_record(new_record, existing_record, self.config.patch_paths or [])
+            remove_paths = (
+                self.config.patch_paths if self.config.remove_missing_patch_paths else None
+            )
+            self.patch_record(
+                new_record, existing_record, self.config.patch_paths or [], remove_paths
+            )
 
         elif self.config.object_type == "Items":
             # In non-patch upsert mode, Items still need field preservation from existing
@@ -1289,6 +1323,16 @@ def main(
             group="Job Configuration Parameters: --upsert options",
         ),
     ] = None,
+    remove_missing_patch_paths: Annotated[
+        bool,
+        cyclopts.Parameter(
+            help=(
+                "When patching, remove fields listed in patch_paths that are absent "
+                "from the incoming record"
+            ),
+            group="Job Configuration Parameters: --upsert options",
+        ),
+    ] = False,
     failed_records_file: Annotated[
         Path | None,
         cyclopts.Parameter(group="Job Configuration Parameters"),
@@ -1332,6 +1376,7 @@ def main(
         overwrite_item_status: Overwrite item status during upsert.
         patch_existing_records: Enable selective field patching during upsert.
         patch_paths: Comma-separated list of field paths to patch.
+        remove_missing_patch_paths: Remove patch_paths fields absent from the incoming record.
         failed_records_file: Path to file for writing failed records.
         rerun_failed_records: After the main run, reprocess failed records one at a time.
         no_progress: Disable progress bar display.
@@ -1383,6 +1428,7 @@ def main(
                 preserve_item_status=not overwrite_item_status,
                 patch_existing_records=patch_existing_records,
                 patch_paths=patch_paths_list,
+                remove_missing_patch_paths=remove_missing_patch_paths,
                 rerun_failed_records=rerun_failed_records,
                 no_progress=no_progress,
             )
